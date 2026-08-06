@@ -81,6 +81,7 @@ struct ZswapInput<P> {
     nullifier: CoinNullifier,
     contract: Option<ContractAddress>,
     value_commitment: embedded::CurvePoint,
+    memo: Option<Memo>,
     proof: P::Proof,
 }
 
@@ -168,14 +169,26 @@ be divided into independent segments, that are each balanced independently.
 Not explicitly included here is that each circuit also accepts an arbitrary
 input that is *bound* to, that is, that the proof will verify only if this
 input matches exactly. This is used to bind to the ciphertext for
-`ZswapOutput`, but is currently unused for `ZswapInput`.
+`ZswapOutput`, and to the memo for `ZswapInput`.
+
+A `Memo` is an opaque byte string of 1..=`MAX_MEMO_BYTES` bytes whose contents the ledger does
+not interpret. Because the spend circuit proves knowledge of the coin's secret key, and the
+memo commitment is bound into that proof, a memo is authenticated by the same secret that
+authorizes the spend, without revealing any public key. Altering, removing, or transplanting a
+memo invalidates the proof. Where there is no memo the bound input is zero, exactly as before
+memos existed, so memo-less inputs verify identically under the old and new rules.
+
+Memos are rejected on contract-owned inputs, where the spend proves no user secret and the
+authentication claim would not hold, and an offer may carry at most one memo, so that a memo
+merged into a republished offer by a third party cannot be mistaken for the original
+spender's.
 
 Explicitly, proof verification is performed as:
 
 ```rust
 impl<P> ZswapInput<P> {
     fn well_formed(self, segment: u16) -> Result<()> {
-        assert!(zk_verify(input_valid, (self, segment), None, self.proof));
+        assert!(zk_verify(input_valid, (self, segment), self.memo, self.proof));
     }
 }
 

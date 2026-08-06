@@ -14,6 +14,8 @@
 #[cfg(feature = "proof-verifying")]
 use crate::ciphertext_to_field;
 use crate::error::MalformedOffer;
+#[cfg(feature = "proof-verifying")]
+use crate::memo_statement_element;
 #[cfg(any(feature = "proof-verifying", test))]
 use crate::filter_invalid;
 use crate::structure::*;
@@ -190,7 +192,7 @@ impl<D: DB> Input<Proof, D> {
             (Fr, Fr),
             self.value_commitment.0
         ));
-        let mut statement = vec![0.into()];
+        let mut statement = vec![memo_statement_element(self.memo.as_deref())];
         for op in with_outputs(prog.into_iter(), [true.into(), segment.into()].into_iter()) {
             op.field_repr(&mut statement);
         }
@@ -312,6 +314,39 @@ impl<D: DB> Transient<(), D> {
     }
 }
 
+/// Structural rules for memos, independent of any proof.
+///
+/// Lives at the offer level rather than on `Input` so that it applies identically to proven,
+/// proof-erased, and preimage offers — all three reach it through
+/// [`offer_well_formed_common`], and only the proven path checks the binding itself.
+fn memos_well_formed<P: Ord + Storable<D>, D: DB>(
+    offer: &Offer<P, D>,
+) -> Result<(), MalformedOffer> {
+    let mut seen_memo = false;
+    for input in offer.inputs.iter() {
+        let Some(memo) = input.memo.as_deref() else {
+            continue;
+        };
+        if let Some(address) = input.contract_address.as_deref() {
+            return Err(MalformedOffer::MemoOnContractOwnedInput { address: *address });
+        }
+        if memo.0.is_empty() {
+            return Err(MalformedOffer::EmptyMemo);
+        }
+        if memo.0.len() > MAX_MEMO_BYTES {
+            return Err(MalformedOffer::MemoTooLarge {
+                size: memo.0.len(),
+                limit: MAX_MEMO_BYTES,
+            });
+        }
+        if seen_memo {
+            return Err(MalformedOffer::MultipleMemos);
+        }
+        seen_memo = true;
+    }
+    Ok(())
+}
+
 #[allow(unstable_name_collisions)] // is_sorted method by the same name works the same.
 fn offer_well_formed_common<P: Ord + Storable<D>, D: DB>(
     offer: &Offer<P, D>,
@@ -328,6 +363,7 @@ fn offer_well_formed_common<P: Ord + Storable<D>, D: DB>(
         warn!("Zswap offer not in normal form");
         return Err(MalformedOffer::NotNormalized);
     }
+    memos_well_formed(offer)?;
     let com_unit: Pedersen = Pedersen(EmbeddedGroupAffine::identity());
     let io_com = offer
         .inputs

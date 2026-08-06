@@ -58,6 +58,16 @@ pub enum MalformedOffer {
     },
     NonDisjointCoinMerge,
     NotNormalized,
+    /// A memo was attached to a contract-owned input. A contract-owned spend proves no user
+    /// secret, so such a memo would carry none of the authorization a memo is meant to convey.
+    MemoOnContractOwnedInput { address: ContractAddress },
+    /// More than one input in the offer carried a memo. One memo per offer keeps "the offer's
+    /// message" unambiguous: a second memo, authorized by a different spender, could otherwise
+    /// ride along in a republished offer and be read as the original maker's.
+    MultipleMemos,
+    /// A memo was present but empty. "No memo" must have exactly one representation.
+    EmptyMemo,
+    MemoTooLarge { size: usize, limit: usize },
 }
 
 impl Display for MalformedOffer {
@@ -75,6 +85,16 @@ impl Display for MalformedOffer {
             ),
             NonDisjointCoinMerge => write!(formatter, "attempted to merge non-disjoint coin sets"),
             NotNormalized => write!(formatter, "offer is not in normal form"),
+            MemoOnContractOwnedInput { address } => write!(
+                formatter,
+                "input owned by contract {:?} carries a memo",
+                address
+            ),
+            MultipleMemos => write!(formatter, "offer carries more than one memo"),
+            EmptyMemo => write!(formatter, "memo is present but empty"),
+            MemoTooLarge { size, limit } => {
+                write!(formatter, "memo of {size} bytes exceeds the {limit} byte limit")
+            }
         }
     }
 }
@@ -88,6 +108,7 @@ pub enum OfferCreationFailed {
     NotContractOwned,
     TreeNotRehashed,
     MerkleTreeError(InvalidUpdate),
+    MemoOnContractOwnedInput,
 }
 
 impl Display for OfferCreationFailed {
@@ -105,6 +126,10 @@ impl Display for OfferCreationFailed {
                 "attempted to spend from a Merkle tree that was not rehashed"
             ),
             MerkleTreeError(msg) => write!(formatter, "merkle tree error: {msg}"),
+            MemoOnContractOwnedInput => write!(
+                formatter,
+                "attempted to attach a memo to a contract-owned input"
+            ),
         }
     }
 }
