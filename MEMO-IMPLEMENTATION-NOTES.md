@@ -31,6 +31,13 @@ Two properties follow:
 | Memos forbidden on contract-owned inputs | The spend circuit takes `Either<ZswapCoinSecretKey, ContractAddress>`. On the contract branch there is no user secret, so "authorized by the spending secret" degrades to "authored by whoever assembled the call". Rather than ship a weaker guarantee under the same name, the case is rejected. |
 | No memo on `Transient` | A transient's coin is created and spent in one transaction, so there is no offer for a message to accompany. `as_input()` yields `memo: None`. |
 | At most one memo per offer | Merging is permissionless. Without this rule, a third party holding any spendable coin — including a zero-value one, which does not perturb the offer's deltas — could merge a memo-carrying input into a republished copy of someone else's offer. Each memo would still be authorized by *its own* spender, but a reader could not tell which memo was the maker's. **This is the most debatable default**: it also makes merging two memo-carrying offers invalid, which is the intended semantics for offer files (one maker, one memo) but forecloses other uses. Worth an explicit decision before this ships. |
+
+Note the rule is **per offer, not per transaction**. A `StandardTransaction` carries a guaranteed
+offer plus one fallible offer per segment, so a transaction may hold several memos — one per
+offer. That is deliberate: the threat the rule addresses is a memo being merged into someone
+else's offer and read as theirs, and a MIP-0005 offer file is exactly one `Offer`. A consumer
+that treats a whole transaction as carrying "the" memo would still need to say which offer it
+means.
 | Memo priced by size only | Memo bytes flow into `serialized_size` → `est_size` → `block_usage` → fees, and into the 1 MiB transaction limit, with no new code. The verifier-side hashing cost is *not* modelled; a `TODO(zswap-memo)` in `ledger/src/structure.rs` marks it. |
 
 ## Where the code is
