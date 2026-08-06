@@ -63,10 +63,6 @@ pub enum MalformedOffer {
     MemoOnContractOwnedInput {
         address: ContractAddress,
     },
-    /// More than one input in the offer carried a memo. One memo per offer keeps "the offer's
-    /// message" unambiguous: a second memo, authorized by a different spender, could otherwise
-    /// ride along in a republished offer and be read as the original maker's.
-    MultipleMemos,
     /// A memo was present but empty. "No memo" must have exactly one representation.
     EmptyMemo,
     MemoTooLarge {
@@ -95,7 +91,6 @@ impl Display for MalformedOffer {
                 "input owned by contract {:?} carries a memo",
                 address
             ),
-            MultipleMemos => write!(formatter, "offer carries more than one memo"),
             EmptyMemo => write!(formatter, "memo is present but empty"),
             MemoTooLarge { size, limit } => {
                 write!(
