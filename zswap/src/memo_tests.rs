@@ -196,9 +196,12 @@ fn mutate(op: Op, bytes: &[u8], other: &[u8]) -> Option<Vec<u8>> {
     Some(out)
 }
 
-/// Every mutation of a memo on a proven input must be rejected. Which error is expected depends
-/// on the operation: mutations that keep a structurally valid memo fail the proof, while
-/// mutations that leave an invalid one are caught by the structural rules first.
+/// Every mutation of a memo on a proven input must be rejected by proof verification.
+///
+/// `Input::well_formed` checks only the proof; the size and placement rules live at the offer
+/// level and are covered separately. So every cell here expects `InvalidProof`, including the
+/// strip case, where the statement falls back to the no-memo sentinel and so no longer matches
+/// what was proved.
 #[tokio::test]
 async fn tamper_matrix_input_memo() {
     let mut rng = StdRng::seed_from_u64(0x7a3);
@@ -371,8 +374,22 @@ fn memo_commitment_is_injective_over_trailing_zeros() {
 
 #[test]
 fn memo_commitment_is_domain_separated_from_ciphertexts() {
-    // A ciphertext and a memo built over the same field content must not collide: the two
-    // commitments use different domain separators.
+    use transient_crypto::hash::{transient_commit, transient_hash};
+
+    // The two commitments must not collide even on identical committed content. Feeding the same
+    // field vector through both openings isolates the domain separator as the only difference —
+    // comparing `memo_to_field` against `ciphertext_to_field` on unrelated inputs would pass
+    // whether or not they were separated, and so would prove nothing.
+    let values: Vec<Fr> = vec![Fr::from(1u64), Fr::from(2u64), Fr::from(3u64)];
+    let memo_domain = Fr::from_le_bytes(b"midnight:zswap-memo[v1]").unwrap();
+    let ciphertext_domain = Fr::from_le_bytes(b"midnight:zswap-ciphertext").unwrap();
+    assert_ne!(memo_domain, ciphertext_domain);
+    assert_ne!(
+        transient_commit(&values[..], transient_hash(&[memo_domain])),
+        transient_commit(&values[..], transient_hash(&[ciphertext_domain])),
+    );
+
+    // And end to end: a ciphertext's own bytes read as a memo do not commit to the ciphertext.
     let mut rng = StdRng::seed_from_u64(0x1d);
     let keys = SecretKeys::from_rng_seed(&mut rng);
     let coin = CoinInfo {
@@ -381,7 +398,6 @@ fn memo_commitment_is_domain_separated_from_ciphertexts() {
         nonce: rng.r#gen(),
     };
     let ciph = CoinCiphertext::new(&mut rng, &coin, keys.encryption_secret_key.public_key());
-
     let mut bytes = Vec::new();
     ciph.serialize(&mut bytes).unwrap();
     let as_memo = Memo(bytes.into_iter().take(MAX_MEMO_BYTES).collect());
