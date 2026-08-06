@@ -57,10 +57,8 @@ pub fn memo_to_field(m: &Memo) -> transient_crypto::curve::Fr {
     }
     transient_commit(
         &fields[..],
-        transient_hash(&[
-            Fr::from_le_bytes(b"midnight:zswap-memo[v1]")
-                .expect("Domain sep should be in range for field"),
-        ]),
+        transient_hash(&[Fr::from_le_bytes(b"midnight:zswap-memo[v1]")
+            .expect("Domain sep should be in range for field")]),
     )
 }
 
@@ -76,11 +74,11 @@ pub(crate) fn memo_statement_element(memo: Option<&Memo>) -> transient_crypto::c
 
 mod construct;
 pub mod error;
-#[cfg(test)]
-mod memo_tests;
 pub mod keys;
 pub mod ledger;
 pub mod local;
+#[cfg(test)]
+mod memo_tests;
 pub mod prove;
 mod structure;
 pub mod verify;
