@@ -11,9 +11,10 @@ with `zswap` being tracked in [Changelog Zswap](./CHANGELOG_zswap.md).
   the spend proof's binding input, which was previously fixed at zero. The memo is therefore
   tamper-evident and authenticated by the same secret that authorizes the spend, with no public
   key revealed. No circuit or key change is required — the shipped `spend.verifier` accepts the
-  new statement. Memos are rejected on contract-owned inputs, empty memos are invalid, and an
-  offer may carry at most one (`MalformedOffer::{MemoOnContractOwnedInput, EmptyMemo,
-  MemoTooLarge, MultipleMemos}`).
+  new statement. An offer may carry a memo per input; the ledger does not nominate one of them
+  as the offer's, since each is bound to its own input and merging many parties' offers into one
+  settlement must stay possible. Memos are rejected on contract-owned inputs and empty memos are
+  invalid (`MalformedOffer::{MemoOnContractOwnedInput, EmptyMemo, MemoTooLarge}`).
 - breaking: bump `zswap-input[v2]` -> `[v3]` and `zswap-offer[v5]` -> `[v6]` for the new field.
 - breaking: bump `transaction[v12]` -> `[v13]` and `standard-transaction[v12]` -> `[v13]`,
   cascading from the `zswap-input` memo field. Transactions without memos verify identically

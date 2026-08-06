@@ -478,53 +478,120 @@ fn memo_on_contract_owned_input_is_rejected_at_construction() {
     assert!(matches!(err, OfferCreationFailed::MemoOnContractOwnedInput));
 }
 
-/// Structural rules apply to proof-erased offers too, which is why they live at the offer level.
+fn erased_offer(inputs: Vec<Input<(), DB>>) -> Offer<(), DB> {
+    let mut offer = Offer::<(), DB> {
+        inputs: inputs.into(),
+        outputs: vec![].into(),
+        transient: vec![].into(),
+        deltas: vec![].into(),
+    };
+    offer.normalize();
+    offer
+}
+
+/// An offer may carry a memo per input. The ledger does not pick one as "the offer's" message:
+/// each is bound to its own input's proof and nullifier, so authorship is already unambiguous,
+/// and forbidding several would break batch settlement, where many parties' offers are merged
+/// into one and each party may have something to say.
 #[test]
-fn offer_rejects_multiple_and_contract_owned_memos_without_proofs() {
+fn offer_accepts_a_memo_per_input() {
     let mut rng = StdRng::seed_from_u64(0x34);
     let keys = SecretKeys::from_rng_seed(&mut rng);
 
     let one = user_input(&mut rng, &keys, Some(memo(b"first"))).unwrap();
     let two = user_input(&mut rng, &keys, Some(memo(b"second"))).unwrap();
+    let bare = user_input(&mut rng, &keys, None).unwrap();
 
-    let mut offer = Offer::<(), DB> {
-        inputs: vec![one.erase_proof(), two.erase_proof()].into(),
-        outputs: vec![].into(),
-        transient: vec![].into(),
-        deltas: vec![].into(),
-    };
-    offer.normalize();
-    assert!(matches!(
-        offer.well_formed(0),
-        Err(MalformedOffer::MultipleMemos)
-    ));
+    assert!(erased_offer(vec![one.erase_proof()]).well_formed(0).is_ok());
+    assert!(
+        erased_offer(vec![one.erase_proof(), two.erase_proof()])
+            .well_formed(0)
+            .is_ok(),
+        "several memos in one offer must be valid"
+    );
+    assert!(
+        erased_offer(vec![
+            one.erase_proof(),
+            two.erase_proof(),
+            bare.erase_proof()
+        ])
+        .well_formed(0)
+        .is_ok()
+    );
+}
 
-    // One memo is fine.
-    let mut offer = Offer::<(), DB> {
-        inputs: vec![one.erase_proof()].into(),
-        outputs: vec![].into(),
-        transient: vec![].into(),
-        deltas: vec![].into(),
-    };
-    offer.normalize();
-    assert!(offer.well_formed(0).is_ok());
+/// Structural rules apply to proof-erased offers too, which is why they live at the offer level.
+#[test]
+fn offer_rejects_contract_owned_memo_without_proofs() {
+    let mut rng = StdRng::seed_from_u64(0x34);
+    let keys = SecretKeys::from_rng_seed(&mut rng);
+    let one = user_input(&mut rng, &keys, Some(memo(b"first"))).unwrap();
 
-    // A memo on a contract-owned input is rejected even with no proof to check.
     let contract_owned = Input::<(), DB> {
         contract_address: Some(Sp::new(ContractAddress::default())),
         ..one.erase_proof()
     };
-    let mut offer = Offer::<(), DB> {
-        inputs: vec![contract_owned].into(),
+    assert!(matches!(
+        erased_offer(vec![contract_owned]).well_formed(0),
+        Err(MalformedOffer::MemoOnContractOwnedInput { .. })
+    ));
+}
+
+/// The batch-settlement case: two separately built memo-carrying offers merge into one that is
+/// still valid, and both memos survive intact. Merging cannot strip a memo even in principle —
+/// doing so would drop the statement back to the no-memo sentinel and invalidate that input's
+/// proof — so this is the only outcome that lets many parties settle together.
+#[tokio::test]
+async fn memo_carrying_offers_can_be_merged() {
+    let mut rng = StdRng::seed_from_u64(0x5c);
+    let resolver = resolver();
+    let alice = SecretKeys::from_rng_seed(&mut rng);
+    let bob = SecretKeys::from_rng_seed(&mut rng);
+
+    let alice_memo = memo(b"alice: selling 100 at 3");
+    let bob_memo = memo(b"bob: buying 100 at 3");
+
+    let alice_offer = Offer::<Proof, DB> {
+        inputs: vec![
+            user_input(&mut rng, &alice, Some(alice_memo.clone()))
+                .unwrap()
+                .prove(prover(&resolver, &mut rng))
+                .await
+                .unwrap(),
+        ]
+        .into(),
         outputs: vec![].into(),
         transient: vec![].into(),
         deltas: vec![].into(),
     };
-    offer.normalize();
-    assert!(matches!(
-        offer.well_formed(0),
-        Err(MalformedOffer::MemoOnContractOwnedInput { .. })
-    ));
+    let bob_offer = Offer::<Proof, DB> {
+        inputs: vec![
+            user_input(&mut rng, &bob, Some(bob_memo.clone()))
+                .unwrap()
+                .prove(prover(&resolver, &mut rng))
+                .await
+                .unwrap(),
+        ]
+        .into(),
+        outputs: vec![].into(),
+        transient: vec![].into(),
+        deltas: vec![].into(),
+    };
+
+    let merged = alice_offer
+        .merge(&bob_offer)
+        .expect("offers with disjoint coins must merge");
+    merged
+        .well_formed(0)
+        .expect("a merged offer carrying both parties' memos must verify");
+
+    let carried: Vec<Memo> = merged
+        .inputs
+        .iter()
+        .filter_map(|i| i.memo.as_deref().cloned())
+        .collect();
+    assert_eq!(carried.len(), 2, "both memos must survive the merge");
+    assert!(carried.contains(&alice_memo) && carried.contains(&bob_memo));
 }
 
 // ---------------------------------------------------------------------------------------------

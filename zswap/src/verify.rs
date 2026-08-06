@@ -319,10 +319,18 @@ impl<D: DB> Transient<(), D> {
 /// Lives at the offer level rather than on `Input` so that it applies identically to proven,
 /// proof-erased, and preimage offers — all three reach it through
 /// [`offer_well_formed_common`], and only the proven path checks the binding itself.
+///
+/// An offer may carry any number of memos, at most one per input since [`Input::memo`] is a
+/// single field. The ledger deliberately does not try to decide which of them is "the offer's"
+/// message: each memo is bound into its own input's proof alongside that input's nullifier, so
+/// authorship is already unambiguous, and merging is permissionless by design — batch
+/// settlement merges many parties' offers into one, and every party may have something to say.
+/// A reader must therefore treat a memo as a message from the owner of the input carrying it,
+/// never as a property of the offer as a whole. Layers where "one maker, one message" *is* true,
+/// such as a single published offer file, are the right place to require exactly one.
 fn memos_well_formed<P: Ord + Storable<D>, D: DB>(
     offer: &Offer<P, D>,
 ) -> Result<(), MalformedOffer> {
-    let mut seen_memo = false;
     for input in offer.inputs.iter() {
         let Some(memo) = input.memo.as_deref() else {
             continue;
@@ -339,10 +347,6 @@ fn memos_well_formed<P: Ord + Storable<D>, D: DB>(
                 limit: MAX_MEMO_BYTES,
             });
         }
-        if seen_memo {
-            return Err(MalformedOffer::MultipleMemos);
-        }
-        seen_memo = true;
     }
     Ok(())
 }

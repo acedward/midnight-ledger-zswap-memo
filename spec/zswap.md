@@ -179,9 +179,13 @@ memo invalidates the proof. Where there is no memo the bound input is zero, exac
 memos existed, so memo-less inputs verify identically under the old and new rules.
 
 Memos are rejected on contract-owned inputs, where the spend proves no user secret and the
-authentication claim would not hold, and an offer may carry at most one memo, so that a memo
-merged into a republished offer by a third party cannot be mistaken for the original
-spender's.
+authentication claim would not hold. An offer may carry one memo per input. The ledger does not
+nominate any of them as the offer's message: each is bound to its own input's proof and
+nullifier, so authorship is already unambiguous, and merging is permissionless by design —
+settling many parties' offers together must remain possible, and each party may have something
+to say. A reader must therefore treat a memo as a message from the owner of the input carrying
+it. Requiring exactly one memo belongs to layers where a single author is actually implied,
+such as a published offer file.
 
 Explicitly, proof verification is performed as:
 

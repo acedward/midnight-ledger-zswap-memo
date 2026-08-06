@@ -30,15 +30,43 @@ Two properties follow:
 | Empty memos invalid | `None` and `Some(empty)` would otherwise be two spellings of "no memo" with different commitments, and the zero sentinel would need to be distinguished from a memo that happens to commit to zero. Rejecting empty removes the question. |
 | Memos forbidden on contract-owned inputs | The spend circuit takes `Either<ZswapCoinSecretKey, ContractAddress>`. On the contract branch there is no user secret, so "authorized by the spending secret" degrades to "authored by whoever assembled the call". Rather than ship a weaker guarantee under the same name, the case is rejected. |
 | No memo on `Transient` | A transient's coin is created and spent in one transaction, so there is no offer for a message to accompany. `as_input()` yields `memo: None`. |
-| At most one memo per offer | Merging is permissionless. Without this rule, a third party holding any spendable coin — including a zero-value one, which does not perturb the offer's deltas — could merge a memo-carrying input into a republished copy of someone else's offer. Each memo would still be authorized by *its own* spender, but a reader could not tell which memo was the maker's. **This is the most debatable default**: it also makes merging two memo-carrying offers invalid, which is the intended semantics for offer files (one maker, one memo) but forecloses other uses. Worth an explicit decision before this ships. |
-
-Note the rule is **per offer, not per transaction**. A `StandardTransaction` carries a guaranteed
-offer plus one fallible offer per segment, so a transaction may hold several memos — one per
-offer. That is deliberate: the threat the rule addresses is a memo being merged into someone
-else's offer and read as theirs, and a MIP-0005 offer file is exactly one `Offer`. A consumer
-that treats a whole transaction as carrying "the" memo would still need to say which offer it
-means.
+| Any number of memos per offer, at most one per input | One per input is structural — `Input::memo` is a single field. The ledger does **not** try to nominate one of them as "the offer's" message. See the discussion below. |
 | Memo priced by size only | Memo bytes flow into `serialized_size` → `est_size` → `block_usage` → fees, and into the 1 MiB transaction limit, with no new code. The verifier-side hashing cost is *not* modelled; a `TODO(zswap-memo)` in `ledger/src/structure.rs` marks it. |
+
+### Why the ledger permits several memos
+
+An earlier revision of this branch enforced at most one memo per offer, on the reasoning that
+merging is permissionless: a third party holding any spendable coin — including a zero-value one,
+which does not perturb the offer's deltas because `normalize_deltas` drops zero entries — can
+merge a memo-carrying input into a republished copy of someone else's offer, leaving a reader
+unable to tell which memo was the maker's.
+
+That rule was removed, for two reasons.
+
+**It broke the main use case.** Merging is not an edge case, it is the settlement mechanism.
+Batch settlement (coincidence of wants) merges many parties' offers into a single transaction,
+and every party may legitimately have something to say. A rule that makes two memo-carrying
+offers unmergeable forecloses that outright. Note also that merging cannot strip a memo even in
+principle: removing one drops that input's statement back to the zero sentinel and invalidates
+its proof. So there is no "reconcile at merge" escape hatch — the validity rule was the only
+lever, and it was pointed at the wrong thing.
+
+**It was buying less than it cost.** Authorship is *already* unambiguous cryptographically. A
+memo is bound into its own input's proof alongside that input's nullifier, so it cannot be moved
+between inputs (`memo_cannot_be_swapped_between_inputs`), and a memo is a field *on* an input —
+there is no `offer.memo` to misread. What the rule actually protected against was software
+treating "some memo in this offer" as "the offer's message". That is a question about a
+particular artifact's semantics, not about consensus.
+
+So the constraint belongs at the layer where "one maker, one message" is actually true: a
+published offer file is a single maker's advertisement, and its decoder should require exactly
+one memo. Once offers are merged into a settlement transaction, that artifact is no longer an
+offer file and several memos are correct.
+
+Rejected alternative: nominating a designated input (say, the lowest nullifier) as the one whose
+memo "counts". A nullifier is a hash of the coin and secret key, so an attacker can grind nonces
+over their own coins until they hold the lowest nullifier in a merged offer and thereby capture
+the designated slot. That converts a visible ambiguity into a silent hijack.
 
 ## Where the code is
 
