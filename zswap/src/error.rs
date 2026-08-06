@@ -60,14 +60,19 @@ pub enum MalformedOffer {
     NotNormalized,
     /// A memo was attached to a contract-owned input. A contract-owned spend proves no user
     /// secret, so such a memo would carry none of the authorization a memo is meant to convey.
-    MemoOnContractOwnedInput { address: ContractAddress },
+    MemoOnContractOwnedInput {
+        address: ContractAddress,
+    },
     /// More than one input in the offer carried a memo. One memo per offer keeps "the offer's
     /// message" unambiguous: a second memo, authorized by a different spender, could otherwise
     /// ride along in a republished offer and be read as the original maker's.
     MultipleMemos,
     /// A memo was present but empty. "No memo" must have exactly one representation.
     EmptyMemo,
-    MemoTooLarge { size: usize, limit: usize },
+    MemoTooLarge {
+        size: usize,
+        limit: usize,
+    },
 }
 
 impl Display for MalformedOffer {
@@ -93,7 +98,10 @@ impl Display for MalformedOffer {
             MultipleMemos => write!(formatter, "offer carries more than one memo"),
             EmptyMemo => write!(formatter, "memo is present but empty"),
             MemoTooLarge { size, limit } => {
-                write!(formatter, "memo of {size} bytes exceeds the {limit} byte limit")
+                write!(
+                    formatter,
+                    "memo of {size} bytes exceeds the {limit} byte limit"
+                )
             }
         }
     }

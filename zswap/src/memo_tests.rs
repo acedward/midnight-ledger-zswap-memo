@@ -120,8 +120,12 @@ async fn u1_memo_input_verifies_against_shipped_verifier_key() {
     let resolver = resolver();
     let keys = SecretKeys::from_rng_seed(&mut rng);
 
-    let input = user_input(&mut rng, &keys, Some(memo(b"for sale: baby shoes, never worn")))
-        .expect("user-owned spend with a memo should be constructible");
+    let input = user_input(
+        &mut rng,
+        &keys,
+        Some(memo(b"for sale: baby shoes, never worn")),
+    )
+    .expect("user-owned spend with a memo should be constructible");
     let proven = input
         .prove(prover(&resolver, &mut rng))
         .await
@@ -213,7 +217,7 @@ async fn tamper_matrix_input_memo() {
 
     for op in OPS {
         let mutated = mutate(op, &original, &other);
-        let tampered = with_memo(&proven, mutated.clone().map(|b| Memo(b)));
+        let tampered = with_memo(&proven, mutated.clone().map(Memo));
         let err = tampered
             .well_formed(0)
             .expect_err(&format!("memo tamper {op:?} must be rejected"));
@@ -329,10 +333,7 @@ async fn builder_desynchronisation_fails_verification() {
     let proven = desynced.prove(prover(&resolver, &mut rng)).await.unwrap();
 
     assert!(
-        matches!(
-            proven.well_formed(0),
-            Err(MalformedOffer::InvalidProof(_))
-        ),
+        matches!(proven.well_formed(0), Err(MalformedOffer::InvalidProof(_))),
         "a memo not reflected in the binding input must not verify"
     );
 }
@@ -362,7 +363,7 @@ fn memo_commitment_is_injective_over_trailing_zeros() {
     assert_ne!(memo_to_field(&memo(&[0])), memo_to_field(&memo(&[0, 0])));
     assert_ne!(memo_to_field(&memo(b"hi")), memo_to_field(&memo(b"hi\0")));
     // Chunk boundary: 31 bytes fills one field element exactly.
-    let a = memo(&vec![7u8; 31]);
+    let a = memo(&[7u8; 31]);
     let mut b_bytes = vec![7u8; 31];
     b_bytes.push(0);
     assert_ne!(memo_to_field(&a), memo_to_field(&Memo(b_bytes)));
@@ -458,10 +459,7 @@ fn memo_on_contract_owned_input_is_rejected_at_construction() {
         Some(memo(b"contracts hold no spending secret")),
     )
     .expect_err("a contract-owned input must not accept a memo");
-    assert!(matches!(
-        err,
-        OfferCreationFailed::MemoOnContractOwnedInput
-    ));
+    assert!(matches!(err, OfferCreationFailed::MemoOnContractOwnedInput));
 }
 
 /// Structural rules apply to proof-erased offers too, which is why they live at the offer level.

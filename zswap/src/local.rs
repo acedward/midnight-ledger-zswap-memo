@@ -243,7 +243,14 @@ impl<D: DB> State<D> {
         coin: &QualifiedCoinInfo,
         segment: Option<u16>,
     ) -> Result<(State<D>, Input<ProofPreimage, D>), OfferCreationFailed> {
-        self.spend_from_tree(rng, secret_keys, coin, segment, &self.merkle_tree.clone(), None)
+        self.spend_from_tree(
+            rng,
+            secret_keys,
+            coin,
+            segment,
+            &self.merkle_tree.clone(),
+            None,
+        )
     }
 
     /// Spends a coin, attaching a [`Memo`] authorized by the same secret that authorizes the

@@ -14,10 +14,10 @@
 #[cfg(feature = "proof-verifying")]
 use crate::ciphertext_to_field;
 use crate::error::MalformedOffer;
-#[cfg(feature = "proof-verifying")]
-use crate::memo_statement_element;
 #[cfg(any(feature = "proof-verifying", test))]
 use crate::filter_invalid;
+#[cfg(feature = "proof-verifying")]
+use crate::memo_statement_element;
 use crate::structure::*;
 #[cfg(feature = "proof-verifying")]
 use base_crypto::fab::AlignedValue;
@@ -144,10 +144,10 @@ impl AuthorizedClaim<Proof> {
             .verify(
                 &transient_crypto_old::proofs::PARAMS_VERIFIER,
                 &transient_crypto_old::proofs::Proof(self.proof.0.clone()),
-                statement.into_iter().map(|f|
+                statement.into_iter().map(|f| {
                     transient_crypto_old::curve::Fr::from_le_bytes(&f.as_le_bytes())
                         .expect("Fr round-trip")
-                ),
+                }),
             )
             .map_err(|e| MalformedOffer::InvalidProof(anyhow::anyhow!("{e}")))
     }
@@ -200,10 +200,10 @@ impl<D: DB> Input<Proof, D> {
             .verify(
                 &transient_crypto_old::proofs::PARAMS_VERIFIER,
                 &transient_crypto_old::proofs::Proof(self.proof.0.clone()),
-                statement.into_iter().map(|f|
+                statement.into_iter().map(|f| {
                     transient_crypto_old::curve::Fr::from_le_bytes(&f.as_le_bytes())
                         .expect("Fr round-trip")
-                ),
+                }),
             )
             .map_err(|e| MalformedOffer::InvalidProof(anyhow::anyhow!("{e}")))
     }
@@ -275,10 +275,10 @@ impl<D: DB> Output<Proof, D> {
             .verify(
                 &transient_crypto_old::proofs::PARAMS_VERIFIER,
                 &transient_crypto_old::proofs::Proof(self.proof.0.clone()),
-                statement.into_iter().map(|f|
+                statement.into_iter().map(|f| {
                     transient_crypto_old::curve::Fr::from_le_bytes(&f.as_le_bytes())
                         .expect("Fr round-trip")
-                ),
+                }),
             )
             .map_err(|e| MalformedOffer::InvalidProof(anyhow::anyhow!("{e}")))
     }
