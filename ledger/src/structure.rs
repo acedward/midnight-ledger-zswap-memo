@@ -1381,7 +1381,7 @@ pub const INITIAL_PARAMETERS: LedgerParameters = LedgerParameters {
 #[derive(Storable)]
 #[storable(db = D)]
 #[derive_where(Clone; S, B, P)]
-#[tag = "transaction[v12]"]
+#[tag = "transaction[v13]"]
 // TODO: Getting `Box` to serialize is a pain right now. Revisit later.
 #[allow(clippy::large_enum_variant)]
 pub enum Transaction<S: SignatureKind<D>, P: ProofKind<D>, B: Storable<D>, D: DB> {
@@ -1665,7 +1665,7 @@ pub const GUARANTEED_SEGMENT: Segment = 0;
 #[derive(Storable)]
 #[storable(db = D)]
 #[derive_where(Clone, Debug; S, P, B)]
-#[tag = "standard-transaction[v12]"]
+#[tag = "standard-transaction[v13]"]
 pub struct StandardTransaction<S: SignatureKind<D>, P: ProofKind<D>, B: Storable<D>, D: DB> {
     pub network_id: String,
     pub intents: HashMap<Segment, Intent<S, P, B, D>, D>,
@@ -1942,6 +1942,10 @@ where
         Ok(margin_fees.into_atomic_units(SPECKS_PER_DUST))
     }
 
+    // TODO(zswap-memo): Zswap input memos are currently priced only through the transaction's
+    // serialized size, which flows into `est_size` -> `block_usage` here. That covers storage and
+    // bandwidth but not the verifier-side cost of hashing the memo in `memo_to_field`, which is
+    // linear in memo length. Add a cost-model entry for it and calibrate via generate-cost-model.
     pub fn fees(
         &self,
         params: &LedgerParameters,

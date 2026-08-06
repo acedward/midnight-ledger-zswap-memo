@@ -187,6 +187,86 @@ impl From<CoinCiphertext> for encryption::Ciphertext {
     }
 }
 
+/// The largest permitted [`Memo`], in bytes.
+///
+/// Memo bytes are consensus data and are paid for through the transaction's serialized size, so
+/// the bound exists to keep a memo from being the cheapest way to put arbitrary data on chain.
+/// This should become a ledger parameter rather than a compile-time constant.
+pub const MAX_MEMO_BYTES: usize = 512;
+
+/// How many bytes of a memo are packed into each field element by
+/// [`memo_to_field`](crate::memo_to_field). One below the 32-byte field width, so that any
+/// chunk is guaranteed to be less than the field modulus.
+pub(crate) const MEMO_BYTES_PER_FIELD: usize = 31;
+
+/// An opaque message attached to an [`Input`], authorized by the coin's spending secret.
+///
+/// A commitment to the memo occupies the spend proof's binding input, so a memo cannot be
+/// added, altered, or removed without invalidating the proof, and only a party able to produce
+/// that proof — the holder of the spending secret — can attach one. The ledger does not
+/// interpret the bytes; whether they are plaintext or a ciphertext addressed to some audience is
+/// left to the application.
+///
+/// A memo is between 1 and [`MAX_MEMO_BYTES`] bytes. Zero-length memos are rejected so that
+/// "no memo" has exactly one representation, keeping it distinct from any memo's commitment.
+#[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Storable)]
+#[storable(base)]
+pub struct Memo(pub Vec<u8>);
+
+impl Memo {
+    /// Creates a memo, rejecting sizes outside `1..=MAX_MEMO_BYTES`.
+    pub fn new(bytes: Vec<u8>) -> Result<Self, MalformedOffer> {
+        match bytes.len() {
+            0 => Err(MalformedOffer::EmptyMemo),
+            len if len > MAX_MEMO_BYTES => Err(MalformedOffer::MemoTooLarge {
+                size: len,
+                limit: MAX_MEMO_BYTES,
+            }),
+            _ => Ok(Memo(bytes)),
+        }
+    }
+}
+
+impl Tagged for Memo {
+    fn tag() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("zswap-memo[v1]")
+    }
+    fn tag_unique_factor() -> String {
+        format!("(bounded-bytes,{MAX_MEMO_BYTES})")
+    }
+}
+tag_enforcement_test!(Memo);
+
+impl Serializable for Memo {
+    fn serialize(&self, writer: &mut impl std::io::Write) -> Result<(), std::io::Error> {
+        <u32 as Serializable>::serialize(&(self.0.len() as u32), writer)?;
+        writer.write_all(&self.0)
+    }
+
+    fn serialized_size(&self) -> usize {
+        <u32 as Serializable>::serialized_size(&(self.0.len() as u32)) + self.0.len()
+    }
+}
+
+impl Deserializable for Memo {
+    fn deserialize(
+        reader: &mut impl std::io::Read,
+        recursive_depth: u32,
+    ) -> Result<Self, std::io::Error> {
+        let len = <u32 as Deserializable>::deserialize(reader, recursive_depth)? as usize;
+        // Checked before allocating: the length is attacker-controlled.
+        if len == 0 || len > MAX_MEMO_BYTES {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("memo length {len} outside 1..={MAX_MEMO_BYTES}"),
+            ));
+        }
+        let mut bytes = vec![0u8; len];
+        reader.read_exact(&mut bytes)?;
+        Ok(Memo(bytes))
+    }
+}
+
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Serializable, Serialize)]
 #[tag = "zswap-authorized-claim[v3]"]
 /// A claim to a specific public key, authorized by the user's private key.
@@ -209,13 +289,15 @@ impl<P> AuthorizedClaim<P> {
 
 #[derive(Storable, Serialize)]
 #[derive_where(PartialEq, Eq, PartialOrd, Ord, Hash, Clone; P)]
-#[tag = "zswap-input[v2]"]
+#[tag = "zswap-input[v3]"]
 #[storable(db = D)]
 pub struct Input<P: Storable<D>, D: DB> {
     pub nullifier: Nullifier,
     pub value_commitment: Pedersen,
     pub contract_address: Option<Sp<ContractAddress, D>>,
     pub merkle_tree_root: MerkleTreeDigest,
+    /// An optional message, bound into this spend's proof. See [`Memo`].
+    pub memo: Option<Sp<Memo, D>>,
     pub proof: Arc<P>,
 }
 tag_enforcement_test!(Input<(), InMemoryDB>);
@@ -237,6 +319,7 @@ impl<P: Storable<D>, D: DB> Input<P, D> {
             value_commitment: self.value_commitment,
             contract_address: self.contract_address.clone(),
             merkle_tree_root: self.merkle_tree_root,
+            memo: self.memo.clone(),
             proof: Arc::new(()),
         }
     }
@@ -426,6 +509,9 @@ impl<P: Clone + Storable<D>, D: DB> Transient<P, D> {
                 .rehash()
                 .root()
                 .expect("rehashed tree must have root"),
+            // Transients carry no memo: the spend and the output are the same transaction, so
+            // there is no offer for a message to accompany.
+            memo: None,
             proof: self.proof_input.clone(),
         }
     }
@@ -471,7 +557,7 @@ tag_enforcement_test!(Delta);
 
 #[derive(Storable)]
 #[derive_where(PartialEq, Eq, PartialOrd, Ord, Clone; P)]
-#[tag = "zswap-offer[v5]"]
+#[tag = "zswap-offer[v6]"]
 #[storable(db = D)]
 /// A Zswap offer consists of a potentially unbalanced set of Zswap
 /// inputs/outputs.

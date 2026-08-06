@@ -35,8 +35,49 @@ pub(crate) fn ciphertext_to_field(c: &CoinCiphertext) -> transient_crypto::curve
     )
 }
 
+/// Commits to a memo, producing the field element an [`Input`]'s spend proof binds to.
+///
+/// The bytes are packed into field elements [`MEMO_BYTES_PER_FIELD`] at a time and prefixed with
+/// the byte length. The prefix is what makes the packing injective: without it a memo and the
+/// same memo followed by zero bytes would pack to the same field elements, since the final chunk
+/// is zero-padded.
+///
+/// Domain separated from [`ciphertext_to_field`], so a value committed as a memo can never be
+/// reinterpreted as a coin ciphertext commitment or vice versa.
+pub fn memo_to_field(m: &Memo) -> transient_crypto::curve::Fr {
+    use transient_crypto::curve::Fr;
+    use transient_crypto::hash::{transient_commit, transient_hash};
+    let mut fields = vec![Fr::from(m.0.len() as u64)];
+    for chunk in m.0.chunks(MEMO_BYTES_PER_FIELD) {
+        let mut buf = [0u8; MEMO_BYTES_PER_FIELD];
+        buf[..chunk.len()].copy_from_slice(chunk);
+        fields.push(
+            Fr::from_le_bytes(&buf).expect("chunk below field width should be in range for field"),
+        );
+    }
+    transient_commit(
+        &fields[..],
+        transient_hash(&[
+            Fr::from_le_bytes(b"midnight:zswap-memo[v1]")
+                .expect("Domain sep should be in range for field"),
+        ]),
+    )
+}
+
+/// The first element of a Zswap spend proof's statement: the memo commitment, or zero when there
+/// is no memo.
+///
+/// Both proof construction and verification derive the value through this one function. They must
+/// agree exactly — a divergence would be a consensus split, not a local bug — so it deliberately
+/// has no second implementation.
+pub(crate) fn memo_statement_element(memo: Option<&Memo>) -> transient_crypto::curve::Fr {
+    memo.map(memo_to_field).unwrap_or_else(|| 0.into())
+}
+
 mod construct;
 pub mod error;
+#[cfg(test)]
+mod memo_tests;
 pub mod keys;
 pub mod ledger;
 pub mod local;

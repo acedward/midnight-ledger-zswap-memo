@@ -136,6 +136,10 @@ impl<D: DB> Input<ProofPreimage, D> {
             value_commitment: self.value_commitment,
             contract_address: self.contract_address.clone(),
             merkle_tree_root: self.merkle_tree_root,
+            // Carried through proving: dropping it here would strip the memo from an input whose
+            // proof is already bound to it, leaving an input that can never verify.
+            memo: self.memo.clone(),
+            // `None`: the binding input already commits to the memo and must not be overwritten.
             proof: Arc::new(prover.prove(&self.proof, None).await?),
         })
     }
