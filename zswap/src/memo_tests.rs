@@ -720,3 +720,42 @@ fn with_memo_helper_covers_erased_inputs() {
     let _ = with_memo(&erased, Some(memo(b"x")));
     let _: Arc<()> = erased.proof.clone();
 }
+
+/// Frozen expected values for [`memo_to_field`].
+///
+/// This is the one test that can catch an accidental change to the memo encoding. Construction
+/// and verification deliberately share `memo_statement_element`, so if the packing, the length
+/// prefix, the chunk width or the domain separator changed, *both* sides would change together
+/// and every round-trip, injectivity and domain-separation test here would still pass — while
+/// silently altering a consensus rule and invalidating every previously proved memo. These
+/// vectors are what makes such a change fail loudly.
+///
+/// If one of these assertions fires, the encoding changed. That is a hard fork: do not update
+/// the constants to match unless that is precisely what you intend.
+#[test]
+fn memo_to_field_matches_golden_vectors() {
+    const GOLDEN: [(&str, &str); 5] = [
+        // (memo, expected memo_to_field as little-endian hex)
+        ("one zero byte", "731dab59a22ef473b632068c8cd8dfc198f2d9327bfde81cf34b767bd1eee72f"),
+        ("ascii", "9c91754b311713226fc113e8aebf987d49405645b8e9c5be2a385ac56cfd8d56"),
+        // 31 bytes fills exactly one field element; 32 spills into a second, zero-padded one.
+        ("31 x 0x07", "aaa161b051f591f39b2ffbe8362a197bbabadab66a7455530d29b5596a42fe3a"),
+        ("32 x 0x07", "86b0785f04932e03e6c069c781a2c2924eeede02e447dc9e3f3af7f2bf355f37"),
+        ("512 x 0xa5", "880ded964331c1f45a20a8c6991b9879ac1d776937ded66e608d8d225418e762"),
+    ];
+    let inputs: [Vec<u8>; 5] = [
+        vec![0x00; 1],
+        b"midnight offer memo".to_vec(),
+        vec![0x07; 31],
+        vec![0x07; 32],
+        vec![0xa5; MAX_MEMO_BYTES],
+    ];
+
+    for ((label, expected), bytes) in GOLDEN.iter().zip(inputs) {
+        let actual = hex::encode(memo_to_field(&Memo(bytes)).as_le_bytes());
+        assert_eq!(
+            &actual, expected,
+            "memo_to_field({label}) changed -- this is a consensus-visible encoding change"
+        );
+    }
+}
