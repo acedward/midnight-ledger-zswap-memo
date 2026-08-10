@@ -2,6 +2,19 @@
 
 Branch `feat/zswap-input-memo`, based on `4823b535` (tag `ledger-9.1.0.0-rc.3`).
 
+**Scope: a fresh-chain dev/undeployed-network prototype, not an upgrade path.** The updated
+ledger reads `transaction[v13]` only; there is no `[v12]` decoder and no activation boundary, so
+it cannot decode or replay existing Ledger9 history. Deployed networks, wallet/`ledger-wasm`
+APIs, and calibrated memo-verification cost are all out of scope. v12→v13 transition support and
+cost calibration are production blockers tracked separately.
+
+**Branch layout.** This branch is source-only against the base commit: full workspace, path
+dependencies intact, no manifest or lockfile churn, so it can be reviewed against upstream.
+Consumers pin `integration/zswap-input-memo`, which is this branch plus the release-isolation
+edits the per-crate release tags carry (workspace trimmed to `zswap` and `ledger`, internal path
+deps stripped). Build and test *this* branch with `cargo +1.95` — the full workspace needs it,
+because `storage-core` requires `sysinfo ^0.39.1`.
+
 ## What the change is
 
 `Input` gains `memo: Option<Sp<Memo, D>>`. A commitment to the memo is placed in the spend
