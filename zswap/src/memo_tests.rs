@@ -736,12 +736,27 @@ fn with_memo_helper_covers_erased_inputs() {
 fn memo_to_field_matches_golden_vectors() {
     const GOLDEN: [(&str, &str); 5] = [
         // (memo, expected memo_to_field as little-endian hex)
-        ("one zero byte", "731dab59a22ef473b632068c8cd8dfc198f2d9327bfde81cf34b767bd1eee72f"),
-        ("ascii", "9c91754b311713226fc113e8aebf987d49405645b8e9c5be2a385ac56cfd8d56"),
+        (
+            "one zero byte",
+            "731dab59a22ef473b632068c8cd8dfc198f2d9327bfde81cf34b767bd1eee72f",
+        ),
+        (
+            "ascii",
+            "9c91754b311713226fc113e8aebf987d49405645b8e9c5be2a385ac56cfd8d56",
+        ),
         // 31 bytes fills exactly one field element; 32 spills into a second, zero-padded one.
-        ("31 x 0x07", "aaa161b051f591f39b2ffbe8362a197bbabadab66a7455530d29b5596a42fe3a"),
-        ("32 x 0x07", "86b0785f04932e03e6c069c781a2c2924eeede02e447dc9e3f3af7f2bf355f37"),
-        ("512 x 0xa5", "880ded964331c1f45a20a8c6991b9879ac1d776937ded66e608d8d225418e762"),
+        (
+            "31 x 0x07",
+            "aaa161b051f591f39b2ffbe8362a197bbabadab66a7455530d29b5596a42fe3a",
+        ),
+        (
+            "32 x 0x07",
+            "86b0785f04932e03e6c069c781a2c2924eeede02e447dc9e3f3af7f2bf355f37",
+        ),
+        (
+            "512 x 0xa5",
+            "880ded964331c1f45a20a8c6991b9879ac1d776937ded66e608d8d225418e762",
+        ),
     ];
     let inputs: [Vec<u8>; 5] = [
         vec![0x00; 1],
@@ -756,6 +771,109 @@ fn memo_to_field_matches_golden_vectors() {
         assert_eq!(
             &actual, expected,
             "memo_to_field({label}) changed -- this is a consensus-visible encoding change"
+        );
+    }
+}
+
+/// The interoperability target: a maker publishes a memo-bearing offer, a settler merges an
+/// ordinary memo-less offer into it, and the combined settlement still verifies with the maker's
+/// memo intact and readable on the maker's own input.
+///
+/// The settler here uses the *unchanged* memo-less construction, whose statement element stays
+/// the legacy `0` — the same value a pre-memo build would produce. That is what makes memo-less
+/// and memo-bearing spends composable in one settlement.
+#[tokio::test]
+async fn maker_memo_survives_settlement_and_is_readable_per_input() {
+    let mut rng = StdRng::seed_from_u64(0x9e);
+    let resolver = resolver();
+    let maker = SecretKeys::from_rng_seed(&mut rng);
+    let settler = SecretKeys::from_rng_seed(&mut rng);
+    let maker_memo = memo(b"selling 100 NIGHT, terms attached");
+
+    let maker_input = user_input(&mut rng, &maker, Some(maker_memo.clone()))
+        .unwrap()
+        .prove(prover(&resolver, &mut rng))
+        .await
+        .unwrap();
+    let maker_nullifier = maker_input.nullifier;
+
+    // The settler spends through the ordinary API; no memo, legacy statement element.
+    let settler_unproven = user_input(&mut rng, &settler, None).unwrap();
+    assert_eq!(settler_unproven.proof.binding_input, Fr::from(0u64));
+    let settler_input = settler_unproven
+        .prove(prover(&resolver, &mut rng))
+        .await
+        .unwrap();
+
+    let offer_of = |i: Input<Proof, DB>| Offer::<Proof, DB> {
+        inputs: vec![i].into(),
+        outputs: vec![].into(),
+        transient: vec![].into(),
+        deltas: vec![].into(),
+    };
+    let settlement = offer_of(maker_input)
+        .merge(&offer_of(settler_input))
+        .expect("maker and settler coins are disjoint");
+    settlement
+        .well_formed(0)
+        .expect("the settlement must verify with one memo-bearing and one memo-less input");
+
+    // Round-trip the settlement the way a counterparty would receive it, then read the memo back.
+    let mut bytes = Vec::new();
+    settlement.serialize(&mut bytes).unwrap();
+    let received = <Offer<Proof, DB> as Deserializable>::deserialize(&mut &bytes[..], 0).unwrap();
+    received
+        .well_formed(0)
+        .expect("verification is what authenticates the memo; do it before reading");
+
+    // Authenticity is per input: the memo belongs to the nullifier whose proof committed to it.
+    let carried: Vec<(_, _)> = received
+        .inputs
+        .iter()
+        .map(|i| (i.nullifier, i.memo.as_deref().cloned()))
+        .collect();
+    let maker_entry = carried
+        .iter()
+        .find(|(n, _)| *n == maker_nullifier)
+        .expect("the maker input must survive settlement");
+    assert_eq!(
+        maker_entry.1.as_ref(),
+        Some(&maker_memo),
+        "the maker's memo must be readable on the maker's own input"
+    );
+    assert_eq!(
+        carried.iter().filter(|(_, m)| m.is_some()).count(),
+        1,
+        "the settler contributed no memo, so exactly one input carries one"
+    );
+
+    // And the settlement is no more malleable than a lone input: altering or removing the
+    // maker's memo while keeping its proof breaks verification.
+    for tampered_memo in [Some(memo(b"selling 100 NIGHT, different terms")), None] {
+        let inputs: Vec<Input<Proof, DB>> = received
+            .inputs
+            .iter()
+            .map(|i| {
+                if i.nullifier == maker_nullifier {
+                    with_memo(&i, tampered_memo.clone())
+                } else {
+                    (*i).clone()
+                }
+            })
+            .collect();
+        let mut tampered = Offer::<Proof, DB> {
+            inputs: inputs.into(),
+            outputs: vec![].into(),
+            transient: vec![].into(),
+            deltas: vec![].into(),
+        };
+        tampered.normalize();
+        assert!(
+            matches!(
+                tampered.well_formed(0),
+                Err(MalformedOffer::InvalidProof(_))
+            ),
+            "tampering with the maker memo inside a settlement must be rejected"
         );
     }
 }

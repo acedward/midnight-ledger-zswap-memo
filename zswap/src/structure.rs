@@ -358,11 +358,26 @@ impl<P: Storable<D>, D: DB> Debug for Input<P, D> {
         match &self.contract_address {
             Some(addr) => write!(
                 formatter,
-                "<shielded input {:?} for: {:?}>",
+                "<shielded input {:?} for: {:?}",
                 self.nullifier, addr
-            ),
-            None => write!(formatter, "<shielded input {:?}>", self.nullifier),
+            )?,
+            None => write!(formatter, "<shielded input {:?}", self.nullifier)?,
         }
+        // Rendered so that inspection tooling can show what a spend actually carries. The bytes
+        // are only meaningful once the proof has verified: verification authenticates the memo
+        // for *this* input's nullifier, and nothing authenticates it before that.
+        if let Some(memo) = self.memo.as_deref() {
+            write!(
+                formatter,
+                " memo({} bytes): {}",
+                memo.0.len(),
+                memo.0
+                    .iter()
+                    .map(|b| format!("{b:02x}"))
+                    .collect::<String>()
+            )?;
+        }
+        write!(formatter, ">")
     }
 }
 
