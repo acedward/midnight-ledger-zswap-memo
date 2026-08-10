@@ -4,10 +4,43 @@ package.repository = "https://github.com/midnightntwrk/midnight-ledger"
 members = [
     "zswap",
     "ledger",
+    "ledger-wasm",
+    "proof-server",
+    "onchain-runtime",
+    "onchain-runtime-wasm",
+    "onchain-state",
+    "onchain-vm",
+    "storage",
+    "zkir",
+    "zkir-v3",
+    "zkir-wasm",
+    "zkir-v3-wasm",
+    "transient-crypto",
+    "base-crypto",
+    "base-crypto-derive",
+    "coin-structure",
+    "serialize",
+    "serialize-macros",
+    "generate-cost-model",
+    "wasm-proving-demos/zkir-mt",
+    "static",
+    "storage-core"
 ]
 default-members = [
     "zswap",
     "ledger",
+    "onchain-runtime",
+    "onchain-state",
+    "onchain-vm",
+    "storage",
+    "zkir",
+    "base-crypto",
+    "base-crypto-derive",
+    "transient-crypto",
+    "coin-structure",
+    "serialize",
+    "serialize-macros",
+    "generate-cost-model",
 ]
 resolver = "2"
 exclude = [
@@ -34,23 +67,10 @@ panic = "abort"
 # present in consumer builds is fine, as they don't/shouldn't *want* the local
 # packages.
 [patch.crates-io]
-# This workspace is trimmed to the two crates the zswap-input-memo branch modifies, and their
-# `path` deps have been stripped so a consumer patching them by path resolves everything else
-# normally. These entries mirror midnight-node's own patch table, so what is built and tested
-# here is what the node builds.
-midnight-zswap = { path = "zswap" }
-midnight-ledger-v9 = { path = "ledger" }
-midnight-coin-structure       = { git = "https://github.com/midnightntwrk/midnight-ledger", tag = "coin-structure-3.0.0-rc.1" }
-midnight-base-crypto          = { git = "https://github.com/midnightntwrk/midnight-ledger", tag = "base-crypto-1.1.0-rc.2" }
-midnight-base-crypto-derive   = { git = "https://github.com/midnightntwrk/midnight-ledger", tag = "base-crypto-derive-1.1.0-rc.2" }
-midnight-transient-crypto     = { git = "https://github.com/midnightntwrk/midnight-ledger", tag = "transient-crypto-3.0.0-rc.2" }
-midnight-transient-crypto-old = { package = "midnight-transient-crypto", git = "https://github.com/midnightntwrk/midnight-ledger", tag = "transient-crypto-2.2.0-rc.1" }
-midnight-onchain-vm           = { git = "https://github.com/midnightntwrk/midnight-ledger", tag = "onchain-vm-4.0.0-rc.2" }
-midnight-onchain-state        = { git = "https://github.com/midnightntwrk/midnight-ledger", tag = "onchain-state-4.0.0-rc.3" }
-midnight-onchain-runtime      = { git = "https://github.com/midnightntwrk/midnight-ledger", tag = "onchain-runtime-4.0.0-rc.2" }
-midnight-zkir                 = { git = "https://github.com/midnightntwrk/midnight-ledger", tag = "zkir-2.2.0-rc.3" }
-midnight-serialize            = { git = "https://github.com/midnightntwrk/midnight-ledger", tag = "serialize-1.2.0-rc.1" }
-
+midnight-base-crypto = { path = "base-crypto" }
+midnight-serialize = { path = "serialize" }
+# Because we rely on additions in 2.2
+midnight-transient-crypto-old = { git = "https://github.com/midnightntwrk/midnight-ledger", tag = "transient-crypto-2.2.0-rc.1", package = "midnight-transient-crypto" }
 
 [workspace.metadata.spellcheck]
 config = ".spellcheck/cargo-spellcheck.toml"
