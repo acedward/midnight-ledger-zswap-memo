@@ -81,6 +81,7 @@ struct ZswapInput<P> {
     nullifier: CoinNullifier,
     contract: Option<ContractAddress>,
     value_commitment: embedded::CurvePoint,
+    memo: Option<Memo>,
     proof: P::Proof,
 }
 
@@ -168,14 +169,119 @@ be divided into independent segments, that are each balanced independently.
 Not explicitly included here is that each circuit also accepts an arbitrary
 input that is *bound* to, that is, that the proof will verify only if this
 input matches exactly. This is used to bind to the ciphertext for
-`ZswapOutput`, but is currently unused for `ZswapInput`.
+`ZswapOutput`, and to the memo for `ZswapInput`.
+
+A `Memo` is an opaque byte string of 1..=`MAX_MEMO_BYTES` bytes whose contents the ledger does
+not interpret. Successful spend-proof verification establishes the cryptographic fact that the
+same secret which authorized that input also committed to the memo bytes, without revealing a
+public key. The ledger's public `Authenticated` inspection status is deliberately stronger: the
+complete real transaction must validate and the carrying segment must apply successfully against
+the supplied ledger state and block context. Before that paired verdict the bytes remain
+`Unverified`; if validation or that segment's application fails they are `Invalid`. Altering,
+removing, or transplanting a memo invalidates the proof. Where there is no memo the bound input is
+zero, exactly as before memos existed, so memo-less inputs verify identically under the old and new
+rules.
+
+Memos are rejected on contract-owned inputs, where the spend proves no user secret and the
+authentication claim would not hold. An offer may carry one memo per input. The ledger does not
+nominate any of them as the offer's message: each is bound to its own input's proof and
+nullifier, so authorship is already unambiguous, and merging is permissionless by design —
+settling many parties' offers together must remain possible, and each party may have something
+to say. Only after complete real validation **and successful application of the carrying
+segment** may a reader treat a memo as authorized by the spending secret for the input carrying
+it; this does not establish a human identity, chain inclusion, confirmations, or finality.
+Requiring exactly one memo belongs to layers where a single author is actually implied, such as
+a published offer file.
+
+### The memo statement element
+
+The value bound into a `ZswapInput`'s proof is not the memo bytes but a field element derived
+from them. This subsection is normative: it is the whole of what an independent implementation
+needs, and any disagreement with it is a consensus split rather than a local bug.
+
+Write `p` for the proof system's scalar field modulus, `H` for the Poseidon hash over that field
+used throughout this specification (`transient_hash`), and `LE(b)` for the integer obtained by
+reading the byte string `b` little-endian.
+
+**Absence.** A memo-less input's statement element is the field element `0`. This is the value a
+pre-memo implementation produced, which is what makes memo-less inputs verify identically under
+the old and the new rules.
+
+`0` is reserved for absence. A present memo's element is a Poseidon output, so producing one
+equal to `0` is a preimage problem, not something the encoding rules out by construction — the
+separation rests on the hash, exactly as the separation between any two distinct memos does. Note
+also what absence is *not*: an empty memo is rejected at every boundary rather than being encoded,
+so there is no second spelling of "no memo" and no memo whose length prefix is `0`.
+
+**Presence.** For a memo `m` of `n` bytes, `1 <= n <= MAX_MEMO_BYTES` (512):
+
+1. *Domain separation.* Let `dom = LE("midnight:zswap-memo[v1]")`, that is, the 23 ASCII bytes of
+   that string read little-endian and zero-extended to the field width. Let `opening = H([dom])`.
+   The domain string differs from the one output ciphertexts use
+   (`"midnight:zswap-ciphertext"`), so cross-protocol reinterpretation requires a collision in
+   the underlying hash rather than following directly from the encoding.
+2. *Length prefix.* The first committed element is `n` as a field element. It is what makes the
+   packing injective: the final chunk is zero-padded, so without the prefix a memo and the same
+   memo followed by zero bytes would produce identical chunks.
+3. *Chunking.* Split `m` into `k = ceil(n / 31)` chunks of 31 bytes; the last is zero-padded on
+   the right to 31 bytes. 31 is one below the 32-byte field width, so every chunk is guaranteed
+   below `p` and the map from chunk to field element is total and injective — no reduction, and
+   no rejected memo.
+4. *Field interpretation.* Chunk `i` becomes the field element `c_i = LE(chunk_i)`, reading the
+   31 padded bytes little-endian.
+5. *Commitment.* The statement element is
+
+   ```text
+   memo_to_field(m) = H([opening, n, c_0, c_1, ..., c_{k-1}])
+   ```
+
+   Elements are hashed in exactly that order with no further length prefix, framing, or padding.
+
+So, completely:
+
+```rust
+fn memo_statement_element(memo: Option<Memo>) -> Fr {
+    match memo {
+        None => Fr::from(0),
+        Some(m) => {
+            let opening = H(&[LE(b"midnight:zswap-memo[v1]")]);
+            let mut elems = vec![opening, Fr::from(m.len() as u64)];
+            for chunk in m.as_bytes().chunks(31) {
+                let mut padded = [0u8; 31];
+                padded[..chunk.len()].copy_from_slice(chunk);
+                elems.push(LE(&padded));
+            }
+            H(&elems)
+        }
+    }
+}
+```
+
+**Frozen vectors.** An implementation is conformant only if it reproduces all of these. Values
+are `memo_to_field` output written as 32 little-endian bytes in hex. The 31- and 32-byte cases
+straddle the chunk boundary, and the first two rows pin the length prefix.
+
+| Memo | `memo_to_field`, little-endian hex |
+| --- | --- |
+| *absent* (`None`) | `0000000000000000000000000000000000000000000000000000000000000000` |
+| `00` (one zero byte) | `731dab59a22ef473b632068c8cd8dfc198f2d9327bfde81cf34b767bd1eee72f` |
+| `"midnight offer memo"` (ASCII, 19 bytes) | `9c91754b311713226fc113e8aebf987d49405645b8e9c5be2a385ac56cfd8d56` |
+| 31 bytes of `0x07` | `aaa161b051f591f39b2ffbe8362a197bbabadab66a7455530d29b5596a42fe3a` |
+| 32 bytes of `0x07` | `86b0785f04932e03e6c069c781a2c2924eeede02e447dc9e3f3af7f2bf355f37` |
+| 512 bytes of `0xa5` | `880ded964331c1f45a20a8c6991b9879ac1d776937ded66e608d8d225418e762` |
 
 Explicitly, proof verification is performed as:
 
 ```rust
 impl<P> ZswapInput<P> {
     fn well_formed(self, segment: u16) -> Result<()> {
-        assert!(zk_verify(input_valid, (self, segment), None, self.proof));
+        // Structural rules first: they are cheap, and no proof can rescue an input that breaks
+        // them. `memo_well_formed` is the same function complete offer validation applies, so a
+        // standalone input and an input inside an offer are judged identically.
+        memo_well_formed(self.memo, self.contract)?;
+        // The bound value is the statement element, never the raw bytes.
+        let bound = memo_statement_element(self.memo);
+        assert!(zk_verify(input_valid, (self, segment), bound, self.proof));
     }
 }
 

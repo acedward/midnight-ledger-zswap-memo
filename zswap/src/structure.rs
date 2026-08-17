@@ -187,6 +187,191 @@ impl From<CoinCiphertext> for encryption::Ciphertext {
     }
 }
 
+/// The largest permitted [`Memo`], in bytes.
+///
+/// Memo bytes are consensus data and are paid for through the transaction's serialized size, so
+/// the bound exists to keep a memo from being the cheapest way to put arbitrary data on chain.
+/// This should become a ledger parameter rather than a compile-time constant.
+pub const MAX_MEMO_BYTES: usize = 512;
+
+/// How many bytes of a memo are packed into each field element by
+/// [`memo_to_field`](crate::memo_to_field). One below the 32-byte field width, so that any
+/// chunk is guaranteed to be less than the field modulus.
+pub(crate) const MEMO_BYTES_PER_FIELD: usize = 31;
+
+/// Opaque bytes attached to an [`Input`] and committed to by its spend proof.
+///
+/// A commitment to the memo occupies the spend proof's binding input, so a memo cannot be added,
+/// altered, or removed without invalidating a successfully verified proof. Proof verification
+/// establishes that the holder of the spending secret committed to the bytes; the ledger's
+/// stronger public `Authenticated` inspection status additionally requires complete real
+/// transaction validation and successful application of the carrying segment. Until that paired
+/// verdict these bytes are attacker-controlled claims. The ledger does not interpret them;
+/// whether they are plaintext or a ciphertext addressed to some audience is left to the
+/// application.
+///
+/// A memo is between 1 and [`MAX_MEMO_BYTES`] bytes. Zero-length memos are rejected so that
+/// "no memo" has exactly one representation, keeping it distinct from any memo's commitment.
+///
+/// The byte vector is private: every checked constructor ([`Memo::new`] and the `TryFrom`
+/// implementations) enforces the same range. Serialization and deserialization re-check anyway
+/// — see `check_memo_len` — so that a value reconstituted from storage or produced by some
+/// future unchecked path still cannot reach the wire.
+#[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Storable)]
+#[storable(base)]
+pub struct Memo(Vec<u8>);
+
+/// The single place the memo length rule is decided.
+///
+/// Construction, serialization and deserialization all funnel through this, so the bound cannot
+/// drift between the boundary that accepts a memo and the boundary that encodes it.
+pub(crate) fn check_memo_len(len: usize) -> Result<(), MalformedOffer> {
+    match len {
+        0 => Err(MalformedOffer::EmptyMemo),
+        len if len > MAX_MEMO_BYTES => Err(MalformedOffer::MemoTooLarge {
+            size: len,
+            limit: MAX_MEMO_BYTES,
+        }),
+        _ => Ok(()),
+    }
+}
+
+/// The complete memo policy for one input, shared by checked construction, untrusted storage
+/// decoding, standalone validation and complete offer/transaction validation.
+pub(crate) fn memo_well_formed(
+    memo: Option<&Memo>,
+    contract_address: Option<&ContractAddress>,
+) -> Result<(), MalformedOffer> {
+    let Some(memo) = memo else {
+        return Ok(());
+    };
+    // A contract-owned spend proves no user secret, so a memo on it would carry none of the
+    // authorization a memo exists to convey. Rejected before the size rule so the more specific
+    // diagnosis wins.
+    if let Some(address) = contract_address {
+        return Err(MalformedOffer::MemoOnContractOwnedInput { address: *address });
+    }
+    check_memo_len(memo.len())
+}
+
+impl Memo {
+    /// Creates a memo, rejecting sizes outside `1..=MAX_MEMO_BYTES`.
+    pub fn new(bytes: Vec<u8>) -> Result<Self, MalformedOffer> {
+        check_memo_len(bytes.len())?;
+        Ok(Memo(bytes))
+    }
+
+    /// The memo's bytes. Always between 1 and [`MAX_MEMO_BYTES`] of them.
+    ///
+    /// These are opaque application data. Proof verification can establish their binding to the
+    /// carrying spend, but callers should treat the bytes as unverified until complete real
+    /// validation and successful application of the carrying segment; see [`Input`].
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
+
+    /// Consumes the memo, returning its bytes.
+    pub fn into_bytes(self) -> Vec<u8> {
+        self.0
+    }
+
+    /// The memo's length in bytes, always in `1..=MAX_MEMO_BYTES`.
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    /// Whether the backing value is empty.
+    ///
+    /// Checked construction makes this `false` for every valid `Memo`; reading the bytes rather
+    /// than hard-coding the answer keeps this accessor honest if corrupted storage or a future
+    /// internal unchecked path ever reconstructs an invalid value.
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl TryFrom<Vec<u8>> for Memo {
+    type Error = MalformedOffer;
+
+    fn try_from(bytes: Vec<u8>) -> Result<Self, Self::Error> {
+        Memo::new(bytes)
+    }
+}
+
+impl TryFrom<&[u8]> for Memo {
+    type Error = MalformedOffer;
+
+    fn try_from(bytes: &[u8]) -> Result<Self, Self::Error> {
+        // This is a public boundary for borrowed, potentially attacker-controlled bytes. Check
+        // the bound before cloning so an oversized request cannot force an attacker-sized
+        // allocation merely to learn that it is invalid.
+        check_memo_len(bytes.len())?;
+        Ok(Memo(bytes.to_vec()))
+    }
+}
+
+impl AsRef<[u8]> for Memo {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl Tagged for Memo {
+    fn tag() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("zswap-memo[v1]")
+    }
+    fn tag_unique_factor() -> String {
+        format!("(bounded-bytes,{MAX_MEMO_BYTES})")
+    }
+}
+tag_enforcement_test!(Memo);
+
+/// Wraps a memo length rejection as the I/O error the serialization traits deal in.
+fn memo_io_error(err: MalformedOffer) -> std::io::Error {
+    std::io::Error::new(std::io::ErrorKind::InvalidData, err.to_string())
+}
+
+/// Lowercase hex, for rendering untrusted bytes inertly.
+pub(crate) fn hex_lower(bytes: &[u8]) -> String {
+    use std::fmt::Write;
+    bytes.iter().fold(String::new(), |mut out, b| {
+        let _ = write!(out, "{b:02x}");
+        out
+    })
+}
+
+impl Serializable for Memo {
+    fn serialize(&self, writer: &mut impl std::io::Write) -> Result<(), std::io::Error> {
+        // Defensive. `Memo::new` already guarantees this, but serialization is the last point
+        // before a value becomes consensus data, and an invalid one must never get that far --
+        // it would be a memo no verifier could accept and no deserializer could read back.
+        // The check is also what makes the `as u32` below lossless.
+        check_memo_len(self.0.len()).map_err(memo_io_error)?;
+        <u32 as Serializable>::serialize(&(self.0.len() as u32), writer)?;
+        writer.write_all(&self.0)
+    }
+
+    fn serialized_size(&self) -> usize {
+        <u32 as Serializable>::serialized_size(&(self.0.len() as u32)) + self.0.len()
+    }
+}
+
+impl Deserializable for Memo {
+    fn deserialize(
+        reader: &mut impl std::io::Read,
+        recursive_depth: u32,
+    ) -> Result<Self, std::io::Error> {
+        let len = <u32 as Deserializable>::deserialize(reader, recursive_depth)? as usize;
+        // Checked *before* allocating: the length is attacker-controlled, so a hostile
+        // `u32::MAX` here must cost a comparison rather than 4GiB.
+        check_memo_len(len).map_err(memo_io_error)?;
+        let mut bytes = vec![0u8; len];
+        // A truncated body fails here rather than yielding a short memo.
+        reader.read_exact(&mut bytes)?;
+        Ok(Memo(bytes))
+    }
+}
+
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Serializable, Serialize)]
 #[tag = "zswap-authorized-claim[v3]"]
 /// A claim to a specific public key, authorized by the user's private key.
@@ -209,16 +394,23 @@ impl<P> AuthorizedClaim<P> {
 
 #[derive(Storable, Serialize)]
 #[derive_where(PartialEq, Eq, PartialOrd, Ord, Hash, Clone; P)]
-#[tag = "zswap-input[v2]"]
-#[storable(db = D)]
+#[tag = "zswap-input[v3]"]
+#[storable(db = D, invariant = input_invariant)]
 pub struct Input<P: Storable<D>, D: DB> {
     pub nullifier: Nullifier,
     pub value_commitment: Pedersen,
-    pub contract_address: Option<Sp<ContractAddress, D>>,
+    pub(crate) contract_address: Option<Sp<ContractAddress, D>>,
     pub merkle_tree_root: MerkleTreeDigest,
+    /// An optional message, bound into this spend's proof. See [`Memo`].
+    pub(crate) memo: Option<Sp<Memo, D>>,
     pub proof: Arc<P>,
 }
 tag_enforcement_test!(Input<(), InMemoryDB>);
+
+fn input_invariant<P: Storable<D>, D: DB>(input: &Input<P, D>) -> std::io::Result<()> {
+    memo_well_formed(input.memo.as_deref(), input.contract_address.as_deref())
+        .map_err(memo_io_error)
+}
 
 impl<P> Debug for AuthorizedClaim<P> {
     fn fmt(&self, formatter: &mut Formatter) -> fmt::Result {
@@ -231,12 +423,40 @@ impl<P> Debug for AuthorizedClaim<P> {
 }
 
 impl<P: Storable<D>, D: DB> Input<P, D> {
+    /// The contract that owns this input, or `None` for a user-secret-owned spend.
+    pub fn contract_address(&self) -> Option<&ContractAddress> {
+        self.contract_address.as_deref()
+    }
+
+    /// The memo carried by this input, if any.
+    pub fn memo(&self) -> Option<&Memo> {
+        self.memo.as_deref()
+    }
+
+    /// Returns a clone *claiming* `memo`, after enforcing the same size and ownership policy as
+    /// validation.
+    ///
+    /// This does not recompute a proof or a [`ProofPreimage`] binding input. It is suitable for
+    /// inspecting or deliberately tampering with an untrusted transaction, but changing a memo on
+    /// an already-built input will make that input fail proof verification. Real spends should be
+    /// constructed with `local::State::spend_with_memo`, which binds the memo while creating the
+    /// spend. The placement fields themselves remain crate-private, so a safe external caller
+    /// cannot assemble a contract-owned memo and serialize it.
+    pub fn with_memo(&self, memo: Option<Memo>) -> Result<Self, MalformedOffer> {
+        memo_well_formed(memo.as_ref(), self.contract_address())?;
+        Ok(Input {
+            memo: memo.map(Sp::new),
+            ..self.clone()
+        })
+    }
+
     pub fn erase_proof(&self) -> Input<(), D> {
         Input {
             nullifier: self.nullifier,
             value_commitment: self.value_commitment,
             contract_address: self.contract_address.clone(),
             merkle_tree_root: self.merkle_tree_root,
+            memo: self.memo.clone(),
             proof: Arc::new(()),
         }
     }
@@ -275,11 +495,29 @@ impl<P: Storable<D>, D: DB> Debug for Input<P, D> {
         match &self.contract_address {
             Some(addr) => write!(
                 formatter,
-                "<shielded input {:?} for: {:?}>",
+                "<shielded input {:?} for: {:?}",
                 self.nullifier, addr
-            ),
-            None => write!(formatter, "<shielded input {:?}>", self.nullifier),
+            )?,
+            None => write!(formatter, "<shielded input {:?}", self.nullifier)?,
         }
+        // Rendered so that inspection tooling can show what a spend actually carries, as inert
+        // lowercase hex rather than as text: memo bytes are attacker-controlled, and hex cannot
+        // carry markup, a URL, a terminal escape, a NUL or invalid UTF-8 into whatever displays
+        // this.
+        //
+        // Labelled `unverified` unconditionally. `Debug` has no verification outcome to consult,
+        // and these bytes receive the public authenticated status only after the complete
+        // transaction validates and this carrying segment applies successfully. Callers that can
+        // distinguish those states should render through a verification-aware inspection layer.
+        if let Some(memo) = self.memo.as_deref() {
+            write!(
+                formatter,
+                " unverified memo({} bytes): {}",
+                memo.len(),
+                hex_lower(memo.as_bytes())
+            )?;
+        }
+        write!(formatter, ">")
     }
 }
 
@@ -426,6 +664,9 @@ impl<P: Clone + Storable<D>, D: DB> Transient<P, D> {
                 .rehash()
                 .root()
                 .expect("rehashed tree must have root"),
+            // Transients carry no memo: the spend and the output are the same transaction, so
+            // there is no offer for a message to accompany.
+            memo: None,
             proof: self.proof_input.clone(),
         }
     }
@@ -471,7 +712,7 @@ tag_enforcement_test!(Delta);
 
 #[derive(Storable)]
 #[derive_where(PartialEq, Eq, PartialOrd, Ord, Clone; P)]
-#[tag = "zswap-offer[v5]"]
+#[tag = "zswap-offer[v6]"]
 #[storable(db = D)]
 /// A Zswap offer consists of a potentially unbalanced set of Zswap
 /// inputs/outputs.

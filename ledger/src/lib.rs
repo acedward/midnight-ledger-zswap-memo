@@ -26,8 +26,9 @@ pub mod error;
 pub mod events;
 #[path = "tracing.rs"]
 mod ledger_tracing;
+pub mod memo_inspection;
 mod primitive;
-mod prior_versions;
+pub mod prior_versions;
 pub mod prove;
 pub mod semantics;
 pub mod structure;

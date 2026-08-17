@@ -6,6 +6,19 @@ with `zswap` being tracked in [Changelog Zswap](./CHANGELOG_zswap.md).
 
 ## Unreleased
 
+- feat: add optional authenticated memos to zswap inputs. A `Memo` (1..=`MAX_MEMO_BYTES` bytes)
+  can be attached to a spend via the new `State::spend_with_memo`; a commitment to it occupies
+  the spend proof's binding input, which was previously fixed at zero. The memo is therefore
+  tamper-evident and authenticated by the same secret that authorizes the spend, with no public
+  key revealed. No circuit or key change is required — the shipped `spend.verifier` accepts the
+  new statement. An offer may carry a memo per input; the ledger does not nominate one of them
+  as the offer's, since each is bound to its own input and merging many parties' offers into one
+  settlement must stay possible. Memos are rejected on contract-owned inputs and empty memos are
+  invalid (`MalformedOffer::{MemoOnContractOwnedInput, EmptyMemo, MemoTooLarge}`).
+- breaking: bump `zswap-input[v2]` -> `[v3]` and `zswap-offer[v5]` -> `[v6]` for the new field.
+- breaking: bump `transaction[v12]` -> `[v13]` and `standard-transaction[v12]` -> `[v13]`,
+  cascading from the `zswap-input` memo field. Transactions without memos verify identically
+  under the old and new rules, so history remains valid, but the wire format changes.
 - feat: replace `parallelism_factor` with free floating factors for validation-cost, guaranteed application cost, and fallible application cost, part of the parameters. These apply only to the compute cost, and the `validation_cost` function now has the pre-applied, unlike before.
 - breaking: unify the construction of signing envelopes
 

@@ -14,7 +14,7 @@
 use crate::error::OfferCreationFailed;
 use crate::filter_invalid;
 use crate::structure::*;
-use crate::{ZSWAP_TREE_HEIGHT, ciphertext_to_field};
+use crate::{ZSWAP_TREE_HEIGHT, ciphertext_to_field, memo_statement_element};
 use base_crypto::fab::AlignedValue;
 use coin_structure::coin::{
     self, Commitment, Info as CoinInfo, QualifiedInfo as QualifiedCoinInfo,
@@ -97,6 +97,7 @@ impl<D: DB> Input<ProofPreimage, D> {
             segment,
             SenderEvidence::Contract(contract),
             tree,
+            None,
         )
     }
 
@@ -143,7 +144,11 @@ impl<D: DB> Input<ProofPreimage, D> {
         segment: Option<u16>,
         sk: SenderEvidence<'_>,
         tree: &MerkleTree<A, D>,
+        memo: Option<Memo>,
     ) -> Result<Self, OfferCreationFailed> {
+        if memo.is_some() && matches!(sk, SenderEvidence::Contract(_)) {
+            return Err(OfferCreationFailed::MemoOnContractOwnedInput);
+        }
         let rc_e: EmbeddedFr = rng.r#gen();
         let rc = Fr::try_from(rc_e).expect("Fr should be larger than EmbeddedFr");
         let nullifier = CoinInfo::from(coin).nullifier(&sk);
@@ -208,7 +213,7 @@ impl<D: DB> Input<ProofPreimage, D> {
             private_transcript: Vec::new(),
             public_transcript_inputs,
             public_transcript_outputs: vec![true.into(), segment.unwrap_or(0).into()],
-            binding_input: 0.into(),
+            binding_input: memo_statement_element(memo.as_ref()),
             communications_commitment: None,
             key_location: KeyLocation(Cow::Borrowed("midnight/zswap/spend")),
         };
@@ -220,6 +225,7 @@ impl<D: DB> Input<ProofPreimage, D> {
                 _ => None,
             },
             merkle_tree_root,
+            memo: memo.map(Sp::new),
             proof: Arc::new(proof_preimage),
         };
         //debug_assert!(inp.well_formed().is_ok());
