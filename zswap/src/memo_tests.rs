@@ -28,7 +28,7 @@ use coin_structure::coin::{Info as CoinInfo, QualifiedInfo as QualifiedCoinInfo}
 use coin_structure::contract::ContractAddress;
 use coin_structure::transfer::{Recipient, SenderEvidence};
 use rand::{Rng, SeedableRng, rngs::StdRng};
-use serialize::{Deserializable, Serializable};
+use serialize::{Deserializable, Serializable, tagged_deserialize, tagged_serialize};
 use std::borrow::Cow;
 use std::sync::Arc;
 use storage::arena::Sp;
@@ -198,10 +198,10 @@ fn mutate(op: Op, bytes: &[u8], other: &[u8]) -> Option<Vec<u8>> {
 
 /// Every mutation of a memo on a proven input must be rejected by proof verification.
 ///
-/// `Input::well_formed` checks only the proof; the size and placement rules live at the offer
-/// level and are covered separately. So every cell here expects `InvalidProof`, including the
-/// strip case, where the statement falls back to the no-memo sentinel and so no longer matches
-/// what was proved.
+/// `Input::well_formed` first applies the shared size and placement policy and then verifies the
+/// proof. Every mutation in this matrix remains structurally valid, so every cell specifically
+/// expects `InvalidProof`, including the strip case, where the statement falls back to the
+/// no-memo sentinel and no longer matches what was proved.
 #[tokio::test]
 async fn tamper_matrix_input_memo() {
     let mut rng = StdRng::seed_from_u64(0x7a3);
@@ -220,7 +220,10 @@ async fn tamper_matrix_input_memo() {
 
     for op in OPS {
         let mutated = mutate(op, &original, &other);
-        let tampered = with_memo(&proven, mutated.clone().map(Memo));
+        // Every mutation here stays inside 1..=MAX_MEMO_BYTES, so it is a memo a hostile party
+        // could really put on the wire. The point is that the *proof* rejects it, not the size
+        // rule.
+        let tampered = with_memo(&proven, mutated.clone().map(|b| memo(&b)));
         let err = tampered
             .well_formed(0)
             .expect_err(&format!("memo tamper {op:?} must be rejected"));
@@ -369,7 +372,7 @@ fn memo_commitment_is_injective_over_trailing_zeros() {
     let a = memo(&[7u8; 31]);
     let mut b_bytes = vec![7u8; 31];
     b_bytes.push(0);
-    assert_ne!(memo_to_field(&a), memo_to_field(&Memo(b_bytes)));
+    assert_ne!(memo_to_field(&a), memo_to_field(&memo(&b_bytes)));
 }
 
 #[test]
@@ -400,7 +403,7 @@ fn memo_commitment_is_domain_separated_from_ciphertexts() {
     let ciph = CoinCiphertext::new(&mut rng, &coin, keys.encryption_secret_key.public_key());
     let mut bytes = Vec::new();
     ciph.serialize(&mut bytes).unwrap();
-    let as_memo = Memo(bytes.into_iter().take(MAX_MEMO_BYTES).collect());
+    let as_memo = memo(&bytes.into_iter().take(MAX_MEMO_BYTES).collect::<Vec<u8>>());
     assert_ne!(memo_to_field(&as_memo), ciphertext_to_field(&ciph));
 }
 
@@ -535,6 +538,42 @@ fn offer_rejects_contract_owned_memo_without_proofs() {
         erased_offer(vec![contract_owned]).well_formed(0),
         Err(MalformedOffer::MemoOnContractOwnedInput { .. })
     ));
+}
+
+/// Safe public mutation cannot create an invalid memo placement, and hostile bytes encoding that
+/// placement are rejected while decoding the complete input.
+///
+/// This test deliberately uses crate-private field access for the second half to model bytes from
+/// an untrusted peer. External safe code cannot perform that construction because both placement
+/// fields are private; its only mutation API is [`Input::with_memo`].
+#[test]
+fn checked_input_construction_and_decoding_enforce_memo_placement() {
+    let mut rng = StdRng::seed_from_u64(0x34_51);
+    let keys = SecretKeys::from_rng_seed(&mut rng);
+    let user_owned = user_input(&mut rng, &keys, None).unwrap().erase_proof();
+    let contract_owned = Input::<(), DB> {
+        contract_address: Some(Sp::new(ContractAddress::default())),
+        ..user_owned
+    };
+
+    assert!(matches!(
+        contract_owned.with_memo(Some(memo(b"not authorized by a user secret"))),
+        Err(MalformedOffer::MemoOnContractOwnedInput { .. })
+    ));
+
+    // Simulate an invalid value received from an older/hostile implementation. Internal code can
+    // assemble it for this negative test, but the Storable invariant must prevent it from being
+    // reconstructed at the trust boundary.
+    let invalid_wire_value = Input::<(), DB> {
+        memo: Some(Sp::new(memo(b"hostile wire claim"))),
+        ..contract_owned
+    };
+    let mut encoded = Vec::new();
+    tagged_serialize(&invalid_wire_value, &mut encoded).unwrap();
+    assert!(
+        tagged_deserialize::<Input<(), DB>>(&encoded[..]).is_err(),
+        "a contract-owned memo must not survive untrusted input decoding"
+    );
 }
 
 /// The batch-settlement case: two separately built memo-carrying offers merge into one that is
@@ -767,12 +806,442 @@ fn memo_to_field_matches_golden_vectors() {
     ];
 
     for ((label, expected), bytes) in GOLDEN.iter().zip(inputs) {
-        let actual = hex::encode(memo_to_field(&Memo(bytes)).as_le_bytes());
+        let actual = hex::encode(memo_to_field(&memo(&bytes)).as_le_bytes());
         assert_eq!(
             &actual, expected,
             "memo_to_field({label}) changed -- this is a consensus-visible encoding change"
         );
     }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Public boundaries: an invalid memo must be unconstructible, unreadable and unwritable.
+// ---------------------------------------------------------------------------------------------
+
+/// Encodes a memo body of `declared_len` bytes behind a length header, without going through
+/// `Memo` — which is the point: this is what a hostile peer sends.
+fn encoded_memo(declared_len: u32, body: &[u8]) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    <u32 as Serializable>::serialize(&declared_len, &mut bytes).unwrap();
+    bytes.extend_from_slice(body);
+    bytes
+}
+
+/// Every public way to build a `Memo` rejects the out-of-range lengths, and there is no way in
+/// that skips the check.
+///
+/// The tuple field is private, so `Memo(vec![])` no longer compiles; these are the remaining
+/// doors. If a new constructor is added and forgets to validate, this test will not catch it —
+/// but `check_memo_len` being the only place the rule is written means there is one obvious thing
+/// for that constructor to call.
+#[test]
+fn every_public_constructor_rejects_out_of_range_memos() {
+    for bad in [Vec::new(), vec![0u8; MAX_MEMO_BYTES + 1]] {
+        assert!(
+            Memo::new(bad.clone()).is_err(),
+            "Memo::new accepted {} bytes",
+            bad.len()
+        );
+        assert!(
+            Memo::try_from(bad.clone()).is_err(),
+            "TryFrom<Vec<u8>> accepted {} bytes",
+            bad.len()
+        );
+        assert!(
+            Memo::try_from(&bad[..]).is_err(),
+            "TryFrom<&[u8]> accepted {} bytes",
+            bad.len()
+        );
+        // ... and on the wire, so a peer cannot deliver what a caller cannot build.
+        assert!(
+            <Memo as Deserializable>::deserialize(
+                &mut &encoded_memo(bad.len() as u32, &bad)[..],
+                0
+            )
+            .is_err(),
+            "deserialize accepted {} bytes",
+            bad.len()
+        );
+    }
+
+    // The accepted boundary, including both sides of the 31-byte chunk width.
+    for len in [1usize, 31, 32, 511, MAX_MEMO_BYTES] {
+        let m = Memo::new(vec![0x5au8; len]).expect("length {len} must be accepted");
+        assert_eq!(m.len(), len);
+        assert!(!m.is_empty());
+        assert_eq!(m.as_bytes(), &vec![0x5au8; len][..]);
+    }
+}
+
+/// A hostile declared length must cost a comparison, not an allocation.
+///
+/// `u32::MAX` here would be a 4GiB `vec![0u8; len]` if the bound were checked after allocating,
+/// which is a remote out-of-memory kill for the price of five bytes.
+#[test]
+fn deserialization_rejects_hostile_lengths_before_allocating() {
+    for declared in [0u32, (MAX_MEMO_BYTES + 1) as u32, u32::MAX / 2, u32::MAX] {
+        let bytes = encoded_memo(declared, &[]);
+        assert!(
+            <Memo as Deserializable>::deserialize(&mut &bytes[..], 0).is_err(),
+            "declared length {declared} must be rejected"
+        );
+    }
+}
+
+/// A body shorter than its header is a truncated encoding, not a shorter memo.
+#[test]
+fn deserialization_rejects_truncated_and_reads_exactly_one_memo() {
+    let bytes = encoded_memo(32, &[0xa5u8; 31]);
+    assert!(
+        <Memo as Deserializable>::deserialize(&mut &bytes[..], 0).is_err(),
+        "a truncated body must fail rather than yield a 31-byte memo"
+    );
+
+    // Trailing bytes belong to whatever comes next in the stream: the memo decoder must consume
+    // exactly its own encoding and leave the rest, not swallow it and not fail.
+    let m = memo(b"exactly this");
+    let mut stream = Vec::new();
+    m.serialize(&mut stream).unwrap();
+    stream.extend_from_slice(b"NOT PART OF THE MEMO");
+    let mut cursor = &stream[..];
+    let back = <Memo as Deserializable>::deserialize(&mut cursor, 0).unwrap();
+    assert_eq!(back, m);
+    assert_eq!(cursor, b"NOT PART OF THE MEMO");
+
+    // Nested decoding is supposed to leave bytes for the next field. A top-level tagged value,
+    // however, must consume its entire input so a peer cannot append an alternate spelling or
+    // malformed suffix and still have it accepted as one memo.
+    let mut top_level = Vec::new();
+    tagged_serialize(&m, &mut top_level).unwrap();
+    assert_eq!(tagged_deserialize::<Memo>(&top_level[..]).unwrap(), m);
+    top_level.extend_from_slice(b"TRAILING");
+    assert!(
+        tagged_deserialize::<Memo>(&top_level[..]).is_err(),
+        "a top-level memo encoding with trailing bytes must be rejected"
+    );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Standalone input validation must agree with complete offer validation, and must decide the
+// cheap questions first.
+// ---------------------------------------------------------------------------------------------
+
+/// The same contract-owned memo is rejected the same way whether it is judged alone or inside an
+/// offer, with proofs and without.
+///
+/// Divergence here is the interesting bug: an input that passes on its own and fails in a block
+/// (or the reverse) is a place where two nodes can disagree about the same bytes.
+#[tokio::test]
+async fn standalone_and_offer_validation_agree_on_memo_placement() {
+    let mut rng = StdRng::seed_from_u64(0xc0a1);
+    let resolver = resolver();
+    let keys = SecretKeys::from_rng_seed(&mut rng);
+
+    let proven = user_input(&mut rng, &keys, Some(memo(b"not a contract's to send")))
+        .unwrap()
+        .prove(prover(&resolver, &mut rng))
+        .await
+        .unwrap();
+
+    // Re-home the memo-bearing input onto a contract, which is exactly what a hand-assembled or
+    // decoded input can claim.
+    let contract_owned = Input::<Proof, DB> {
+        contract_address: Some(Sp::new(ContractAddress::default())),
+        ..proven.clone()
+    };
+
+    assert!(
+        matches!(
+            contract_owned.well_formed(0),
+            Err(MalformedOffer::MemoOnContractOwnedInput { .. })
+        ),
+        "standalone proven-input validation must reject a contract-owned memo"
+    );
+    assert!(
+        matches!(
+            Input::<ProofPreimage, DB> {
+                contract_address: Some(Sp::new(ContractAddress::default())),
+                ..user_input(&mut rng, &keys, Some(memo(b"preimage parity"))).unwrap()
+            }
+            .well_formed(0),
+            Err(MalformedOffer::MemoOnContractOwnedInput { .. })
+        ),
+        "standalone proof-preimage validation must reject it identically"
+    );
+    assert!(
+        matches!(
+            contract_owned.erase_proof().well_formed(0),
+            Err(MalformedOffer::MemoOnContractOwnedInput { .. })
+        ),
+        "standalone proof-erased validation must reject it identically"
+    );
+    assert!(
+        matches!(
+            erased_offer(vec![contract_owned.erase_proof()]).well_formed(0),
+            Err(MalformedOffer::MemoOnContractOwnedInput { .. })
+        ),
+        "complete offer validation must reject it identically"
+    );
+}
+
+/// Structural rejection must happen *before* proof verification.
+///
+/// The input below is invalid twice over: its memo sits on a contract-owned input, and its proof
+/// cannot verify against a statement that now includes a contract address. Which error comes back
+/// is therefore a direct read-out of the order the two checks run in. Getting this backwards
+/// means every verifier on the network pays for a pairing check before discarding the input on a
+/// rule that three comparisons settle.
+#[tokio::test]
+async fn structural_memo_rejection_precedes_proof_verification() {
+    let mut rng = StdRng::seed_from_u64(0xc0de);
+    let resolver = resolver();
+    let keys = SecretKeys::from_rng_seed(&mut rng);
+
+    let proven = user_input(&mut rng, &keys, Some(memo(b"cheap check first")))
+        .unwrap()
+        .prove(prover(&resolver, &mut rng))
+        .await
+        .unwrap();
+    let doubly_invalid = Input::<Proof, DB> {
+        contract_address: Some(Sp::new(ContractAddress::default())),
+        ..proven.clone()
+    };
+    assert!(
+        matches!(
+            doubly_invalid.well_formed(0),
+            Err(MalformedOffer::MemoOnContractOwnedInput { .. })
+        ),
+        "the structural verdict must win, which it can only do by being checked first"
+    );
+
+    // Control: with no memo the same re-homing is *only* a proof failure, so the assertion above
+    // is really about ordering and not about the structural check swallowing every error.
+    let memoless = user_input(&mut rng, &keys, None)
+        .unwrap()
+        .prove(prover(&resolver, &mut rng))
+        .await
+        .unwrap();
+    let proof_only = Input::<Proof, DB> {
+        contract_address: Some(Sp::new(ContractAddress::default())),
+        ..memoless
+    };
+    assert!(
+        matches!(
+            proof_only.well_formed(0),
+            Err(MalformedOffer::InvalidProof(_))
+        ),
+        "without a memo there is no structural rule to trip, so the proof must be what fails"
+    );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Consensus mapping: checked against a second implementation, not just against itself.
+// ---------------------------------------------------------------------------------------------
+
+/// A second implementation of the memo statement mapping, written from the normative description
+/// in `spec/zswap.md` rather than from [`memo_to_field`].
+///
+/// It deliberately calls `transient_hash` directly instead of `transient_commit`, so it re-derives
+/// the commitment structure rather than inheriting it. A change to the packing, the length prefix,
+/// the chunk width, the domain separator, or the commitment shape breaks agreement between the two
+/// — which is what the frozen vectors alone cannot catch if both sides are the same code.
+fn memo_to_field_per_spec(bytes: &[u8]) -> Fr {
+    use transient_crypto::hash::transient_hash;
+
+    let domain = Fr::from_le_bytes(b"midnight:zswap-memo[v1]").expect("domain separator in range");
+    let opening = transient_hash(&[domain]);
+    let mut elems = vec![opening, Fr::from(bytes.len() as u64)];
+    for chunk in bytes.chunks(31) {
+        let mut padded = [0u8; 31];
+        padded[..chunk.len()].copy_from_slice(chunk);
+        elems.push(Fr::from_le_bytes(&padded).expect("31 bytes is below the field width"));
+    }
+    transient_hash(&elems)
+}
+
+#[test]
+fn independent_implementation_reproduces_the_mapping() {
+    // Chunk boundaries, the length-prefix cases, and a spread in between.
+    let cases: Vec<Vec<u8>> = vec![
+        vec![0x00; 1],
+        vec![0x00; 2],
+        b"midnight offer memo".to_vec(),
+        vec![0x07; 30],
+        vec![0x07; 31],
+        vec![0x07; 32],
+        vec![0x07; 62],
+        vec![0xff; 511],
+        vec![0xa5; MAX_MEMO_BYTES],
+    ];
+    for bytes in cases {
+        let m = memo(&bytes);
+        assert_eq!(
+            memo_to_field(&m),
+            memo_to_field_per_spec(&bytes),
+            "the two implementations disagree for a {}-byte memo",
+            bytes.len()
+        );
+    }
+
+    // Absence is the reserved sentinel in both readings.
+    assert_eq!(memo_statement_element(None), Fr::from(0u64));
+}
+
+// ---------------------------------------------------------------------------------------------
+// Hostile content must be inert wherever it is rendered.
+// ---------------------------------------------------------------------------------------------
+
+/// Memo bytes are chosen by whoever built the input. Rendering them as text would hand that party
+/// terminal escapes, bidirectional overrides, NULs, markup and URLs in every log line and
+/// debugging session that touches the transaction.
+#[test]
+fn debug_rendering_is_inert_and_never_claims_authenticity() {
+    let mut rng = StdRng::seed_from_u64(0xbad0);
+    let keys = SecretKeys::from_rng_seed(&mut rng);
+
+    let hostile: Vec<u8> = [
+        b"<script>alert(1)</script>".as_slice(),
+        b"https://evil.example/steal",
+        b"\x1b[31mred\x1b[0m",
+        b"\x00\x07\x7f",
+        // A bidirectional override, and bytes that are not valid UTF-8 at all.
+        "\u{202e}".as_bytes(),
+        b"\xff\xfe\xfd",
+    ]
+    .concat();
+    let input = user_input(&mut rng, &keys, Some(memo(&hostile))).unwrap();
+    let rendered = format!("{:?}", input);
+
+    assert!(
+        rendered.contains(&hex::encode(&hostile)),
+        "the exact bytes must still be recoverable, as hex"
+    );
+    for forbidden in ["<script", "https://", "alert(1)", "evil.example"] {
+        assert!(
+            !rendered.contains(forbidden),
+            "rendering leaked {forbidden:?} as text: {rendered}"
+        );
+    }
+    for forbidden in ['\u{1b}', '\0', '\u{7f}', '\u{202e}'] {
+        assert!(
+            !rendered.contains(forbidden),
+            "rendering leaked control character {forbidden:?}"
+        );
+    }
+    assert!(
+        rendered.contains("unverified memo"),
+        "an unvalidated rendering must say so, got: {rendered}"
+    );
+    assert!(
+        !rendered.contains("authenticated"),
+        "`Debug` has no verification result and must never imply one: {rendered}"
+    );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Length matrix through the real proving path.
+// ---------------------------------------------------------------------------------------------
+
+/// Each accepted length proves, round-trips and verifies with byte-for-byte equality.
+///
+/// 31 and 32 straddle the chunk width and 512 is the cap, so this covers every place the packing
+/// changes shape.
+#[tokio::test]
+async fn valid_lengths_survive_prove_round_trip_and_verify() {
+    let mut rng = StdRng::seed_from_u64(0x1e0);
+    let resolver = resolver();
+    let keys = SecretKeys::from_rng_seed(&mut rng);
+
+    for len in [1usize, 31, 32, 511, MAX_MEMO_BYTES] {
+        let bytes: Vec<u8> = (0..len).map(|i| (i % 251) as u8).collect();
+        let m = memo(&bytes);
+        let proven = user_input(&mut rng, &keys, Some(m.clone()))
+            .unwrap()
+            .prove(prover(&resolver, &mut rng))
+            .await
+            .unwrap_or_else(|e| panic!("proving a {len}-byte memo failed: {e:?}"));
+
+        let mut encoded = Vec::new();
+        proven.serialize(&mut encoded).unwrap();
+        let back = <Input<Proof, DB> as Deserializable>::deserialize(&mut &encoded[..], 0).unwrap();
+
+        assert_eq!(
+            back.memo.as_deref().map(Memo::as_bytes),
+            Some(&bytes[..]),
+            "a {len}-byte memo must survive the round trip byte for byte"
+        );
+        back.well_formed(0)
+            .unwrap_or_else(|e| panic!("a {len}-byte memo must verify: {e:?}"));
+    }
+}
+
+/// Two different coins may legitimately carry the *same* memo bytes, and each must be
+/// authenticated on its own.
+///
+/// Equal bytes are the case where an implementation that keyed authenticity on the memo rather
+/// than on the carrying input would look correct right up until it credited one party's message
+/// to the other.
+#[tokio::test]
+async fn identical_memo_bytes_on_two_carriers_verify_independently() {
+    let mut rng = StdRng::seed_from_u64(0x7317);
+    let resolver = resolver();
+    let alice = SecretKeys::from_rng_seed(&mut rng);
+    let bob = SecretKeys::from_rng_seed(&mut rng);
+
+    let shared = memo(b"same words, two authors");
+    let a = user_input(&mut rng, &alice, Some(shared.clone()))
+        .unwrap()
+        .prove(prover(&resolver, &mut rng))
+        .await
+        .unwrap();
+    let b = user_input(&mut rng, &bob, Some(shared.clone()))
+        .unwrap()
+        .prove(prover(&resolver, &mut rng))
+        .await
+        .unwrap();
+
+    assert_ne!(
+        a.nullifier, b.nullifier,
+        "distinct coins, distinct carriers"
+    );
+    a.well_formed(0)
+        .expect("alice's copy must verify on its own");
+    b.well_formed(0).expect("bob's copy must verify on its own");
+
+    let offer = Offer::<Proof, DB> {
+        inputs: vec![a.clone(), b.clone()].into(),
+        outputs: vec![].into(),
+        transient: vec![].into(),
+        deltas: vec![].into(),
+    };
+    let mut offer = offer;
+    offer.normalize();
+    offer
+        .well_formed(0)
+        .expect("both memo-bearing inputs must verify together");
+    assert_eq!(
+        offer
+            .inputs
+            .iter()
+            .filter(|i| i.memo.as_deref() == Some(&shared))
+            .count(),
+        2,
+        "equal bytes must not be deduplicated into one carrier"
+    );
+
+    // The proofs are not interchangeable even though the memos are identical: each is bound to
+    // its own nullifier, so swapping the proofs must fail.
+    let a_with_b_proof = Input::<Proof, DB> {
+        proof: b.proof.clone(),
+        ..a.clone()
+    };
+    assert!(
+        matches!(
+            a_with_b_proof.well_formed(0),
+            Err(MalformedOffer::InvalidProof(_))
+        ),
+        "equal memo bytes must not make two carriers' proofs interchangeable"
+    );
 }
 
 /// The interoperability target: a maker publishes a memo-bearing offer, a settler merges an
@@ -824,9 +1293,11 @@ async fn maker_memo_survives_settlement_and_is_readable_per_input() {
     let received = <Offer<Proof, DB> as Deserializable>::deserialize(&mut &bytes[..], 0).unwrap();
     received
         .well_formed(0)
-        .expect("verification is what authenticates the memo; do it before reading");
+        .expect("proof verification must establish the memo binding before it is inspected");
 
-    // Authenticity is per input: the memo belongs to the nullifier whose proof committed to it.
+    // Proof binding is per input: the memo is carried by the nullifier whose proof committed to
+    // it. The ledger-level `MemoTrust::Authenticated` status additionally requires successful
+    // validation and application against a concrete ledger state.
     let carried: Vec<(_, _)> = received
         .inputs
         .iter()

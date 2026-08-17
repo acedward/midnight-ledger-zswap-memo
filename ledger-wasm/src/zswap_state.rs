@@ -278,7 +278,7 @@ impl ZswapLocalState {
         let details = inputs
             .map(|i| EventDetails::ZswapInput {
                 nullifier: i.nullifier,
-                contract: i.contract_address,
+                contract: i.contract_address().copied().map(storage::arena::Sp::new),
             })
             .chain(outputs.enumerate().map(|(i, o)| EventDetails::ZswapOutput {
                 commitment: o.coin_com,

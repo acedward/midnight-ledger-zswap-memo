@@ -37,18 +37,18 @@ pub(crate) fn ciphertext_to_field(c: &CoinCiphertext) -> transient_crypto::curve
 
 /// Commits to a memo, producing the field element an [`Input`]'s spend proof binds to.
 ///
-/// The bytes are packed into field elements [`MEMO_BYTES_PER_FIELD`] at a time and prefixed with
+/// The bytes are packed into field elements `MEMO_BYTES_PER_FIELD` at a time and prefixed with
 /// the byte length. The prefix is what makes the packing injective: without it a memo and the
 /// same memo followed by zero bytes would pack to the same field elements, since the final chunk
 /// is zero-padded.
 ///
-/// Domain separated from [`ciphertext_to_field`], so a value committed as a memo can never be
-/// reinterpreted as a coin ciphertext commitment or vice versa.
+/// Domain separated from `ciphertext_to_field`, so cross-protocol reinterpretation requires a
+/// collision in the underlying hash rather than following directly from the encoding.
 pub fn memo_to_field(m: &Memo) -> transient_crypto::curve::Fr {
     use transient_crypto::curve::Fr;
     use transient_crypto::hash::{transient_commit, transient_hash};
-    let mut fields = vec![Fr::from(m.0.len() as u64)];
-    for chunk in m.0.chunks(MEMO_BYTES_PER_FIELD) {
+    let mut fields = vec![Fr::from(m.len() as u64)];
+    for chunk in m.as_bytes().chunks(MEMO_BYTES_PER_FIELD) {
         let mut buf = [0u8; MEMO_BYTES_PER_FIELD];
         buf[..chunk.len()].copy_from_slice(chunk);
         fields.push(
