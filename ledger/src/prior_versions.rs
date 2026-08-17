@@ -45,7 +45,7 @@ use storage::db::InMemoryDB;
 use storage::storable::Loader;
 use storage::storage::HashMap;
 use transient_crypto::commitment::PedersenRandomness;
-use zswap::prior::OfferV12;
+use zswap::prior::{MemoHasNoPriorEncoding, OfferV12};
 
 /// The pre-memo `standard-transaction[v12]` layout: intents and binding randomness unchanged,
 /// zswap offers in their v12 (memo-less) form.
@@ -94,6 +94,47 @@ impl<S: SignatureKind<D>, P: ProofKind<D>, B: Storable<D>, D: DB>
                 .collect(),
             binding_randomness: old.binding_randomness,
         }
+    }
+}
+
+impl<S: SignatureKind<D>, P: ProofKind<D>, B: Storable<D>, D: DB>
+    StandardTransactionV12<S, P, B, D>
+{
+    /// The reverse projection, for reproducing v12 bytes from a transaction known to be
+    /// memo-less. Refuses a memo-bearing transaction rather than stripping the memo: the two
+    /// encodings coexist precisely because they are *not* interchangeable once a memo exists.
+    pub fn try_from_current(
+        tx: &StandardTransaction<S, P, B, D>,
+    ) -> Result<Self, MemoHasNoPriorEncoding> {
+        let guaranteed_coins = tx
+            .guaranteed_coins
+            .as_ref()
+            .map(|sp| OfferV12::try_from_current(sp).map(Sp::new))
+            .transpose()?;
+        let mut fallible_coins = HashMap::new();
+        for kv in tx.fallible_coins.iter() {
+            fallible_coins = fallible_coins.insert(*kv.0, OfferV12::try_from_current(&kv.1)?);
+        }
+        Ok(StandardTransactionV12 {
+            network_id: tx.network_id.clone(),
+            intents: tx.intents.clone(),
+            guaranteed_coins,
+            fallible_coins,
+            binding_randomness: tx.binding_randomness,
+        })
+    }
+}
+
+impl<S: SignatureKind<D>, P: ProofKind<D>, B: Storable<D>, D: DB> TransactionV12<S, P, B, D> {
+    /// The reverse of [`From<&TransactionV12> for Transaction`]. See
+    /// [`StandardTransactionV12::try_from_current`].
+    pub fn try_from_current(tx: &Transaction<S, P, B, D>) -> Result<Self, MemoHasNoPriorEncoding> {
+        Ok(match tx {
+            Transaction::Standard(st) => {
+                TransactionV12::Standard(StandardTransactionV12::try_from_current(st)?)
+            }
+            Transaction::ClaimRewards(cr) => TransactionV12::ClaimRewards(cr.clone()),
+        })
     }
 }
 
