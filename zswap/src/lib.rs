@@ -79,6 +79,7 @@ pub mod ledger;
 pub mod local;
 #[cfg(test)]
 mod memo_tests;
+pub mod prior;
 pub mod prove;
 mod structure;
 pub mod verify;
