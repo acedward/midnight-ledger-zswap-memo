@@ -127,6 +127,26 @@ impl<P: Storable<D>, D: DB> InputV12<P, D> {
     }
 }
 
+impl<P: Storable<D>, D: DB> OfferV12<P, D> {
+    /// The reverse projection of [`From<&OfferV12> for Offer`], for reproducing v12 bytes from an
+    /// offer known to be memo-less. Outputs, transients and deltas are unchanged between the eras,
+    /// so only the inputs can refuse: an offer containing one memo-bearing input has no v12 wire
+    /// representation at all.
+    pub fn try_from_current(offer: &Offer<P, D>) -> Result<Self, MemoHasNoPriorEncoding> {
+        let inputs = offer
+            .inputs
+            .iter()
+            .map(|input| InputV12::try_from_current(&input))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(OfferV12 {
+            inputs: inputs.into(),
+            outputs: offer.outputs.clone(),
+            transient: offer.transient.clone(),
+            deltas: offer.deltas.clone(),
+        })
+    }
+}
+
 /// A memo-bearing value cannot be represented in the pre-memo wire format.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MemoHasNoPriorEncoding;
@@ -141,6 +161,60 @@ impl std::error::Error for MemoHasNoPriorEncoding {}
 // Sanity coupling: if `Memo` ever becomes representable in the v12 mirror, this module's
 // premise is wrong. Referencing the type keeps the import meaningful under all feature sets.
 const _: fn(&Memo) -> usize = |m| m.as_bytes().len();
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use base_crypto::hash::HashOutput;
+    use coin_structure::coin::Nullifier;
+
+    type TestOffer = Offer<(), InMemoryDB>;
+    type TestOfferV12 = OfferV12<(), InMemoryDB>;
+
+    fn input(seed: u8) -> Input<(), InMemoryDB> {
+        Input {
+            nullifier: Nullifier(HashOutput([seed; 32])),
+            value_commitment: Pedersen::default(),
+            contract_address: None,
+            merkle_tree_root: MerkleTreeDigest::default(),
+            memo: None,
+            proof: Arc::new(()),
+        }
+    }
+
+    fn offer(inputs: Vec<Input<(), InMemoryDB>>) -> TestOffer {
+        Offer {
+            inputs: inputs.into(),
+            outputs: Vec::new().into(),
+            transient: Vec::new().into(),
+            deltas: Vec::new().into(),
+        }
+    }
+
+    /// The two projections compose to the identity on memo-less offers, which is what lets a
+    /// memo-less transaction be reproduced in either era's encoding from a single value.
+    #[test]
+    fn memoless_offers_round_trip_through_the_v12_mirror() {
+        let original = offer(vec![input(1), input(2)]);
+        let prior = TestOfferV12::try_from_current(&original).expect("no input carries a memo");
+        assert_eq!(prior.inputs.len(), 2);
+        assert_eq!(TestOffer::from(&prior), original);
+    }
+
+    /// A memo has no v12 wire representation, so the whole offer refuses rather than silently
+    /// dropping a proof-bound value.
+    #[test]
+    fn a_memo_bearing_input_has_no_prior_encoding() {
+        let memo = Memo::try_from(&b"hello"[..]).expect("a 5-byte memo is in range");
+        let with_memo = input(3)
+            .with_memo(Some(memo))
+            .expect("a user-owned input may carry a memo");
+        assert_eq!(
+            TestOfferV12::try_from_current(&offer(vec![input(1), with_memo])),
+            Err(MemoHasNoPriorEncoding)
+        );
+    }
+}
 
 impl<P: Storable<D>, D: DB> Debug for InputV12<P, D> {
     fn fmt(&self, formatter: &mut Formatter) -> fmt::Result {
