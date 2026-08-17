@@ -21,7 +21,6 @@ use crate::memo_statement_element;
 use crate::structure::*;
 #[cfg(feature = "proof-verifying")]
 use base_crypto::fab::AlignedValue;
-#[cfg(test)]
 use coin_structure::contract::ContractAddress;
 #[cfg(feature = "proof-verifying")]
 use serialize::Deserializable;
@@ -156,12 +155,17 @@ impl AuthorizedClaim<Proof> {
 impl<D: DB> Input<Proof, D> {
     #[cfg(not(feature = "proof-verifying"))]
     pub fn well_formed(&self, _segment: u16) -> Result<(), MalformedOffer> {
-        Ok(())
+        memo_well_formed(self.memo.as_deref(), self.contract_address.as_deref())
     }
 
     #[instrument]
     #[cfg(feature = "proof-verifying")]
     pub fn well_formed(&self, segment: u16) -> Result<(), MalformedOffer> {
+        // Structure before cryptography: an input whose memo breaks the size or placement rule is
+        // invalid no matter what its proof says, and deciding that costs a few comparisons rather
+        // than a pairing check. This is also the check that keeps a manually assembled or decoded
+        // input from being treated differently here than inside a complete offer.
+        memo_well_formed(self.memo.as_deref(), self.contract_address.as_deref())?;
         let mut prog = Vec::new();
         prog.extend::<[Op<ResultModeGather, InMemoryDB>; 6]>(HistoricMerkleTree_check_root!(
             [Key::Value(0u8.into())],
@@ -209,10 +213,23 @@ impl<D: DB> Input<Proof, D> {
     }
 }
 
+impl<D: DB> Input<ProofPreimage, D> {
+    #[instrument]
+    pub fn well_formed(&self, _segment: u16) -> Result<(), MalformedOffer> {
+        // A proof preimage is a client-side construction value, not authentication evidence, but
+        // callers validating one input still need exactly the same cheap placement/size verdict
+        // as the eventual offer and proven input paths.
+        memo_well_formed(self.memo.as_deref(), self.contract_address.as_deref())
+    }
+}
+
 impl<D: DB> Input<(), D> {
     #[instrument]
     pub fn well_formed(&self, _segment: u16) -> Result<(), MalformedOffer> {
-        Ok(())
+        // There is no proof to check, but the structural rule still holds: a proof-erased input
+        // carrying a memo it is not allowed to carry is malformed, and must be reported as such
+        // rather than silently accepted because the expensive half of validation is absent.
+        memo_well_formed(self.memo.as_deref(), self.contract_address.as_deref())
     }
 }
 
@@ -320,35 +337,21 @@ impl<D: DB> Transient<(), D> {
 /// proof-erased, and preimage offers — all three reach it through
 /// [`offer_well_formed_common`], and only the proven path checks the binding itself.
 ///
-/// An offer may carry any number of memos, at most one per input since [`Input::memo`] is a
-/// single field. The ledger deliberately does not try to decide which of them is "the offer's"
-/// message: each memo is bound into its own input's proof alongside that input's nullifier, so
-/// authorship is already unambiguous, and merging is permissionless by design — batch
-/// settlement merges many parties' offers into one, and every party may have something to say.
-/// A reader must therefore treat a memo as a message from the owner of the input carrying it,
-/// never as a property of the offer as a whole. Layers where "one maker, one message" *is* true,
-/// such as a single published offer file, are the right place to require exactly one.
+/// An offer may carry any number of memos, at most one per input since [`Input::memo`] is a single
+/// field. The ledger deliberately does not try to decide which of them is "the offer's" message:
+/// each memo is bound into its own input's proof alongside that input's nullifier, and merging is
+/// permissionless by design — batch settlement merges many parties' offers into one, and every
+/// party may have something to say. A reader must therefore attribute a memo only to the input
+/// carrying it, never to the offer as a whole, and must not call that attribution authenticated
+/// until complete transaction validation and successful application of the carrying segment.
+/// Layers where "one maker, one message" *is* true, such as a single published offer file, are the
+/// right place to require exactly one.
 fn memos_well_formed<P: Ord + Storable<D>, D: DB>(
     offer: &Offer<P, D>,
 ) -> Result<(), MalformedOffer> {
-    for input in offer.inputs.iter() {
-        let Some(memo) = input.memo.as_deref() else {
-            continue;
-        };
-        if let Some(address) = input.contract_address.as_deref() {
-            return Err(MalformedOffer::MemoOnContractOwnedInput { address: *address });
-        }
-        if memo.0.is_empty() {
-            return Err(MalformedOffer::EmptyMemo);
-        }
-        if memo.0.len() > MAX_MEMO_BYTES {
-            return Err(MalformedOffer::MemoTooLarge {
-                size: memo.0.len(),
-                limit: MAX_MEMO_BYTES,
-            });
-        }
-    }
-    Ok(())
+    offer.inputs.iter().try_for_each(|input| {
+        memo_well_formed(input.memo.as_deref(), input.contract_address.as_deref())
+    })
 }
 
 #[allow(unstable_name_collisions)] // is_sorted method by the same name works the same.
@@ -398,6 +401,11 @@ fn offer_well_formed_common<P: Ord + Storable<D>, D: DB>(
 impl<D: DB> Offer<Proof, D> {
     #[instrument(skip(self))]
     pub fn well_formed(&self, segment: u16) -> Result<Pedersen, MalformedOffer> {
+        // Cheap structure first, proofs second. Normal form and the memo policy are comparisons;
+        // verifying one spend proof costs orders of magnitude more, and no amount of proving can
+        // rescue an offer that is structurally invalid. Running the proofs first would let a
+        // malformed offer bill every verifier on the network for work whose result is discarded.
+        let excess = offer_well_formed_common(self, segment)?;
         self.inputs
             .iter()
             .try_for_each(|i| i.well_formed(segment))?;
@@ -407,7 +415,7 @@ impl<D: DB> Offer<Proof, D> {
         self.transient
             .iter()
             .try_for_each(|t| t.well_formed(segment))?;
-        offer_well_formed_common(self, segment)
+        Ok(excess)
     }
 }
 

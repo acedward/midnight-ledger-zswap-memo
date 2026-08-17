@@ -441,7 +441,7 @@ impl<D: DB> LedgerState<D> {
                 },
                 content: EventDetails::ZswapInput {
                     nullifier: input.nullifier,
-                    contract: input.contract_address.clone(),
+                    contract: input.contract_address().copied().map(Sp::new),
                 },
             });
         }

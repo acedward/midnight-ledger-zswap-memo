@@ -81,6 +81,17 @@ the transaction as a whole is binding.
 - For zswap inputs and outputs, the zero-knowledge proof is binding over the
   input and output (including the Pedersen commitment), and without knowledge of
   the Pedersen randomness, cannot be recreated for a different input or output.
+  - This extends to an input's optional memo. The proof's bound input is the
+    memo statement element (`spec/zswap.md`), so the memo is fixed by the same
+    proof that authorizes the spend: it cannot be added, altered, truncated,
+    extended, removed, or moved to another input without invalidating that
+    proof. Absence is bound too, as the reserved zero sentinel, so a memo cannot
+    be attached to a spend that was proved without one.
+  - Note the scope this gives: a memo is binding for *its own* input, and for
+    nothing wider. Binding says nothing about which party assembled the
+    transaction the input ends up in, so a memo must never be read as a message
+    from the offer, the transaction, or its submitter — only from the holder of
+    the spending secret for the coin carrying it.
 - For transients, there is a direct malleability that the transient can be
   decomposed into its input and output constituents.
   - While this is possible, the decomposed input will not be valid, as it is

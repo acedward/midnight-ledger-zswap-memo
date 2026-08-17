@@ -1500,20 +1500,21 @@ impl<
                         .map(|(com, addr)| (*segment, com, *addr.deref()))
                 })
                 .collect();
-        let nullifiers: MultiSet<(u16, Nullifier, ContractAddress)> =
-            offers
-                .iter()
-                .flat_map(|(segment, offer)| {
-                    offer
-                        .inputs
-                        .iter()
-                        .flat_map(|i| i.contract_address.clone().map(|addr| (i.nullifier, addr)))
-                        .chain(offer.transient.iter().flat_map(|t| {
-                            t.contract_address.clone().map(|addr| (t.nullifier, addr))
-                        }))
-                        .map(|(nullifier, addr)| (*segment, nullifier, *addr.deref()))
-                })
-                .collect();
+        let nullifiers: MultiSet<(u16, Nullifier, ContractAddress)> = offers
+            .iter()
+            .flat_map(|(segment, offer)| {
+                offer
+                    .inputs
+                    .iter()
+                    .filter_map(|i| i.contract_address().map(|addr| (i.nullifier, *addr)))
+                    .chain(offer.transient.iter().filter_map(|t| {
+                        t.contract_address
+                            .as_deref()
+                            .map(|addr| (t.nullifier, *addr))
+                    }))
+                    .map(|(nullifier, addr)| (*segment, nullifier, addr))
+            })
+            .collect();
         let claimed_nullifiers: MultiSet<(u16, Nullifier, ContractAddress)> = transcripts
             .iter()
             .flat_map(|(_, segment, t, addr)| {

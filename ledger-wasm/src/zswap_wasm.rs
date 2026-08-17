@@ -471,9 +471,9 @@ impl ZswapInput {
     pub fn contract_address(&self) -> Result<Option<String>, JsError> {
         use ZswapInputTypes::*;
         match &self.0 {
-            ProvenInput(val) => val.contract_address.clone().map(|x| *x.deref()),
-            UnprovenInput(val) => val.contract_address.clone().map(|x| *x.deref()),
-            ProofErasedInput(val) => val.contract_address.clone().map(|x| *x.deref()),
+            ProvenInput(val) => val.contract_address().copied(),
+            UnprovenInput(val) => val.contract_address().copied(),
+            ProofErasedInput(val) => val.contract_address().copied(),
         }
         .map(|v| to_hex_ser(&v))
         .transpose()
