@@ -40,7 +40,13 @@ What it does, in the order the plan requires:
      priced below measured-work-plus-margin in any admissible run.
 
 Usage:
-    derive-memo-schedule.py <run-id>=<raw.csv>[,<run.json>] ...
+    derive-memo-schedule.py <raw.csv> ...                       # merged CSV, all runs
+    derive-memo-schedule.py <run-id>=<raw.csv>[,<run.json>] ...  # explicit per-run
+
+Starting cold from the repository, the whole record is one command:
+
+    generate-cost-model/memo/derive-memo-schedule.py \
+        generate-cost-model/results/zswap-memo-raw.csv
 """
 
 import csv
@@ -90,11 +96,38 @@ class DerivationFailed(Exception):
 # --------------------------------------------------------------------------------------
 
 
+def load_runs(spec):
+    """Loads one or more runs from a `<run-id>=<csv>[,<json>]` spec, or a merged CSV.
+
+    The retained artifact `results/zswap-memo-raw.csv` holds every run in one file,
+    keyed by a `run_id` column, so a reviewer starting cold from the repository can
+    pass that single path and get exactly the runs it contains. Per-run CSVs, as the
+    collector writes them, still work.
+    """
+    run_id, sep, paths = spec.partition("=")
+    if not sep:
+        run_id, paths = None, spec
+    parts = paths.split(",")
+    csv_path, json_path = parts[0], (parts[1] if len(parts) > 1 else None)
+
+    with open(csv_path, newline="", encoding="utf-8") as handle:
+        header = csv.DictReader(handle).fieldnames or []
+    if "run_id" not in header:
+        return [Run(run_id or Path(csv_path).stem, csv_path, json_path)]
+
+    with open(csv_path, newline="", encoding="utf-8") as handle:
+        ids = sorted({row["run_id"] for row in csv.DictReader(handle)})
+    if run_id:
+        ids = [i for i in ids if i == run_id] or [run_id]
+    return [Run(i, csv_path, json_path, merged_run_id=i) for i in ids]
+
+
 class Run:
-    def __init__(self, run_id, csv_path, json_path=None):
+    def __init__(self, run_id, csv_path, json_path=None, merged_run_id=None):
         self.run_id = run_id
         self.csv_path = Path(csv_path)
         self.json_path = Path(json_path) if json_path else None
+        self.merged_run_id = merged_run_id
         self.statement = {}      # memo_len -> mean_ns
         self.statement_rsd = {}  # memo_len -> relative std dev
         self.controls = {}       # control name -> mean_ns
@@ -105,6 +138,8 @@ class Run:
 
         with open(self.csv_path, newline="", encoding="utf-8") as handle:
             for row in csv.DictReader(handle):
+                if self.merged_run_id is not None and row.get("run_id") != self.merged_run_id:
+                    continue
                 self.profile = row["profile"]
                 group = row["group"]
                 mean = float(row["mean_ns"]) if row["mean_ns"] else None
@@ -539,9 +574,7 @@ def main(argv):
 
     runs = []
     for spec in argv[1:]:
-        run_id, _, paths = spec.partition("=")
-        parts = paths.split(",")
-        runs.append(Run(run_id, parts[0], parts[1] if len(parts) > 1 else None))
+        runs.extend(load_runs(spec))
 
     admissible, verdicts = screen(runs)
     report = {

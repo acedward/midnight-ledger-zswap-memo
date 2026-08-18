@@ -269,11 +269,26 @@ Any operator with Docker, read access to a clone containing `fc70658d`, and
 no shared state with the executing agent is required. The harness refuses to emit
 anything that could be mistaken for acceptance data without an explicit profile.
 
-The two analysis tools are deterministic and consume only the retained CSVs:
+**Re-deriving this record needs no rerun and no network.** Everything above comes
+from the committed CSV, and one command reproduces all of it:
 
 ```sh
-# admissibility, Q-D, candidates, schedule, machine check, B2 -- refuses to emit a
-# schedule unless three admissible runs are supplied
+generate-cost-model/memo/derive-memo-schedule.py \
+    generate-cost-model/results/zswap-memo-raw.csv
+```
+
+It discovers the three runs from the `run_id` column, recomputes each
+admissibility verdict from that run's own samples, performs the Q-D decomposition,
+and exits **non-zero** with `INSUFFICIENT: 0 admissible run(s), 3 required. No
+schedule derived.` The refusal is the point: the tool cannot be talked into
+emitting a schedule from these runs.
+
+Once admissible runs exist, the same command produces the candidate evaluation,
+the per-class base, the +25% margin, the integer schedule, the machine check over
+all 512 lengths, and the B2 reproducibility verdict. Per-run CSVs as the collector
+writes them are also accepted:
+
+```sh
 generate-cost-model/memo/derive-memo-schedule.py \
     acceptance-1=<raw.csv>[,<run.json>] acceptance-2=... acceptance-3=...
 
