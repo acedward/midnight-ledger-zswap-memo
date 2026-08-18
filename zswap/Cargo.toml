@@ -53,3 +53,9 @@ pastey = "0.2.1"
 [[bench]]
 name = "benchmarking"
 harness = false
+
+# Verifier-side memo-work calibration harness. Dev-only target: it adds no dependency and no
+# library code, so the crate a consumer compiles is unchanged.
+[[bench]]
+name = "memo_cost"
+harness = false

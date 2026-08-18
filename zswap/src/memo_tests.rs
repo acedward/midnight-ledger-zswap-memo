@@ -1087,6 +1087,76 @@ fn independent_implementation_reproduces_the_mapping() {
     assert_eq!(memo_statement_element(None), Fr::from(0u64));
 }
 
+/// The contract between this crate and the cost-calibration harness.
+///
+/// `zswap/benches/memo_cost.rs` prices the verifier's memo work per *workload class*, and it
+/// derives that class from three numbers it cannot import: the packing width is `pub(crate)`, the
+/// hash's prefix elements are an internal detail of [`memo_to_field`], and the Poseidon rate lives
+/// in `midnight-circuits`. If any of them moves, every sample the harness has ever taken is
+/// mislabelled, and the resulting schedule can underprice real work — a consensus-visible fault
+/// that no benchmark would report, because the numbers would still look self-consistent.
+///
+/// So they are pinned here instead. This test fails on the change rather than on the consequence.
+#[test]
+fn harness_memo_work_class_constants_are_pinned() {
+    // Mirrored by `MEMO_BYTES_PER_FIELD` in the harness.
+    assert_eq!(
+        MEMO_BYTES_PER_FIELD, 31,
+        "the harness computes chunk counts as ceil(len / 31)"
+    );
+    // Mirrored by the harness's length domain and by `MAX_MEMO_BEARING_INPUTS`'s derivation.
+    assert_eq!(
+        MAX_MEMO_BYTES, 512,
+        "the harness measures the closed range 1..=512"
+    );
+
+    // Mirrored by `HASH_PREFIX_FIELDS`: `memo_to_field` hashes the commitment opening and the
+    // length prefix on top of the packed chunks, so a `len`-byte memo is a
+    // `ceil(len / 31) + 2`-element Poseidon input. Checked against the independent spec
+    // implementation, which builds that vector explicitly.
+    for len in [1usize, 31, 32, 62, 63, MAX_MEMO_BYTES] {
+        let bytes: Vec<u8> = (0..len).map(|i| (i % 251) as u8).collect();
+        let expected_elems = bytes.len().div_ceil(MEMO_BYTES_PER_FIELD) + 2;
+        let mut counted = vec![
+            transient_crypto::hash::transient_hash(&[
+                Fr::from_le_bytes(b"midnight:zswap-memo[v1]").expect("domain separator in range"),
+            ]),
+            Fr::from(bytes.len() as u64),
+        ];
+        for chunk in bytes.chunks(MEMO_BYTES_PER_FIELD) {
+            let mut padded = [0u8; MEMO_BYTES_PER_FIELD];
+            padded[..chunk.len()].copy_from_slice(chunk);
+            counted.push(Fr::from_le_bytes(&padded).expect("chunk is below the field width"));
+        }
+        assert_eq!(
+            counted.len(),
+            expected_elems,
+            "a {len}-byte memo must hash exactly ceil(len / {MEMO_BYTES_PER_FIELD}) + 2 elements"
+        );
+        assert_eq!(
+            transient_crypto::hash::transient_hash(&counted),
+            memo_to_field(&memo(&bytes)),
+            "the counted element vector must be the one `memo_to_field` hashes"
+        );
+    }
+
+    // The harness's third constant, `POSEIDON_RATE`, is not exported by `midnight-circuits`, so
+    // it cannot be pinned by assertion here. What *is* pinned is the arithmetic the harness
+    // derives from it, so that a reviewer can check the labels by hand: with rate 2, a memo's
+    // permutation count is `ceil((ceil(len / 31) + 2) / 2)`. 62 and 63 bytes straddle the first
+    // boundary where both the chunk count and the permutation count change; 63 and 64 straddle
+    // one where neither does.
+    let elems = |len: usize| len.div_ceil(MEMO_BYTES_PER_FIELD) + 2;
+    assert_eq!((elems(62), elems(62).div_ceil(2)), (4, 2));
+    assert_eq!((elems(63), elems(63).div_ceil(2)), (5, 3));
+    assert_eq!((elems(64), elems(64).div_ceil(2)), (5, 3));
+    assert_eq!((elems(1), elems(1).div_ceil(2)), (3, 2));
+    assert_eq!(
+        (elems(MAX_MEMO_BYTES), elems(MAX_MEMO_BYTES).div_ceil(2)),
+        (19, 10)
+    );
+}
+
 // ---------------------------------------------------------------------------------------------
 // Hostile content must be inert wherever it is rendered.
 // ---------------------------------------------------------------------------------------------

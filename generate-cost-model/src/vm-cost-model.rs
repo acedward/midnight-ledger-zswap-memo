@@ -137,8 +137,43 @@ static BENCHMARK_SCHEMAS: LazyLock<IndexMap<&'static str, BenchmarkSchema>> = La
         ("get_writes", schema(&["keys_added_size"])),
         ("update_rcmap", schema(&["keys_added_size"])),
         ("gc_rcmap", schema(&["keys_removed_size"])),
+        // Zswap verifier-side memo work, from zswap/benches/memo_cost.rs.
+        //
+        // The memo statement is a Poseidon commitment over `ceil(memo_len / 31) + 2` field
+        // elements, so the cost can plausibly follow the byte length, the packed-chunk count, or
+        // the sponge's permutation count. Both extremes of that range are carried as model
+        // parameters and the calibration record decides between them; the chunk count travels in
+        // the benchmark id as well, and is read from the raw samples rather than regressed on.
+        //
+        // These ops are *not* VM ops and have no field in `CostModel`, so they are excluded from
+        // `--output-const` below.
+        (
+            "zswap_memo_statement",
+            schema(&["memo_len", "poseidon_permutations"]),
+        ),
+        (
+            "zswap_memo_aggregate",
+            schema(&["memo_inputs", "total_memo_bytes"]),
+        ),
+        (
+            "zswap_memo_validation",
+            schema(&["memo_inputs", "memo_len"]),
+        ),
+        ("zswap_memo_control", schema(&["memo_len"])),
     ])
 });
+
+/// Operations that have no `CostModel` field, and so must never reach the generated constant
+/// declaration. `fr_mul` and `fr_add` are reference measurements; the `zswap_memo_*` family is
+/// calibrated separately (see `generate-cost-model/memo/README.md`).
+const OPS_WITHOUT_COST_MODEL_FIELDS: [&str; 6] = [
+    "fr_mul",
+    "fr_add",
+    "zswap_memo_statement",
+    "zswap_memo_aggregate",
+    "zswap_memo_validation",
+    "zswap_memo_control",
+];
 
 /// Combination of benchmark inputs and measured time
 #[derive(Debug, Clone, Serialize)]
@@ -398,7 +433,7 @@ fn run_main() -> Result<(), Box<dyn Error>> {
             )?;
             let ps = |ns: f64| (ns * 1000f64).ceil().max(0f64) as u64;
             for (op_name, op_model) in all_models.iter() {
-                if ["fr_mul", "fr_add"].contains(&op_name.as_str()) {
+                if OPS_WITHOUT_COST_MODEL_FIELDS.contains(&op_name.as_str()) {
                     continue;
                 }
                 let use_combined = ["pop", "dup", "swap"].contains(&op_name.as_str());
