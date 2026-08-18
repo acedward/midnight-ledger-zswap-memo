@@ -1,0 +1,81 @@
+{
+  "acceptance_data": true,
+  "checks": {
+    "anchor_ratio_max_length": 10.35002227705195,
+    "anchor_ratio_min_length": 2.3606319219620033,
+    "case_counts": {
+      "zswap_memo_aggregate": 4,
+      "zswap_memo_control": 3,
+      "zswap_memo_statement": 512,
+      "zswap_memo_validation": 5
+    },
+    "completion_marker": true,
+    "corpus_digest": "c26fc19990382ae9",
+    "floor_ratio_max_length": 850446.3767840145,
+    "floor_ratio_min_length": 193969.71438452814,
+    "labels_recomputed": true,
+    "sample_size": 100,
+    "timer_floor_ns": 0.3962891895902163,
+    "transient_hash_anchor_ns": 32562.510149656293
+  },
+  "environment": {
+    "bench_out": "/out",
+    "cargo": "cargo 1.91.1 (ea2d97820 2025-10-10)",
+    "container_hostname": "173b56bc0502",
+    "cpu_count": 12,
+    "env": {
+      "CARGO_BUILD_JOBS": "",
+      "MEMO_BENCH_INTEGRATED": "1",
+      "MEMO_BENCH_MAX_INPUTS": "",
+      "MEMO_BENCH_PROFILE": "acceptance",
+      "MEMO_LOAD_NOTE": "shared host; launched in a lull after 20 min of polling (host swung between 3% and 910% container CPU meanwhile); krun 27.2%, containers 3.82% at start; utxo-pinning-* and aa00004-* stacks idle-ish; integrated group on, --network none",
+      "MEMO_RUN_ID": "acceptance-3",
+      "RUSTFLAGS": ""
+    },
+    "load_average_1_5_15": "14.50, 13.74, 9.60",
+    "machine": "aarch64",
+    "platform": "Linux-6.12.54-linuxkit-aarch64-with-glibc2.36",
+    "processor": "",
+    "rustc": "rustc 1.91.1 (ed61e7d7e 2025-11-07)"
+  },
+  "manifest": {
+    "acceptance_data": true,
+    "corpus": {
+      "corpus_commitment_sum": "72c145fa1f85bafcd6bdc995abed2ad3c8402c3af62050218e6ca3be62230b66",
+      "corpus_digest_fnv1a64": "c26fc19990382ae9",
+      "lengths": 512,
+      "profile": "acceptance"
+    },
+    "corpus_seed": "6d656d6f5f62656e",
+    "criterion": {
+      "measurement_ms": 2000,
+      "sample_size": 100,
+      "summary_statistic": "mean.point_estimate",
+      "warm_up_ms": 1000
+    },
+    "expected_cases": {
+      "zswap_memo_aggregate": 4,
+      "zswap_memo_control": 3,
+      "zswap_memo_statement": 512,
+      "zswap_memo_validation": 5
+    },
+    "groups": [
+      "zswap_memo_control",
+      "zswap_memo_statement",
+      "zswap_memo_aggregate",
+      "zswap_memo_validation"
+    ],
+    "harness": "zswap/benches/memo_cost.rs",
+    "integrated": true,
+    "max_memo_bearing_inputs": 256,
+    "order_seed": "0c0ffee000000001",
+    "plan": "plans/00001-sub-02-memo-cost-calibration.md",
+    "profile": "acceptance",
+    "workload_classes": {
+      "hash_prefix_fields": 2,
+      "memo_bytes_per_field": 31,
+      "poseidon_rate": 2
+    }
+  },
+  "rows": 524
+}
