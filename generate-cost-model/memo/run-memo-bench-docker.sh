@@ -59,6 +59,15 @@ case "$MEMO_STAGE" in
     : "${MEMO_BENCH_INTEGRATED:?}"
     : "${MEMO_RESULTS:?}"
 
+    # criterion accumulates: a directory from a previous run survives into this one, and a
+    # previous run with a different profile leaves cases this run never measured. The collector
+    # catches that -- it counts cases against the manifest and refuses the run -- but catching it
+    # after twenty minutes of benchmarking is a poor trade for deleting a directory now. What is
+    # collected is then exactly what this run measured, with no dependence on what ran before.
+    # criterion's own run-to-run change detection is lost, and is not part of this protocol:
+    # reproducibility here is measured between whole runs, not by criterion's baseline diff.
+    rm -rf "${CARGO_TARGET_DIR:-target}/criterion"
+
     echo "=== load at start ==="
     cat /proc/loadavg || true
     nproc || true
