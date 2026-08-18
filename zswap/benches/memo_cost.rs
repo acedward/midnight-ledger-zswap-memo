@@ -44,8 +44,10 @@
 //!   proofs and real verification, memo-bearing and memo-less, to detect verifier work this
 //!   harness would otherwise omit. Off unless `MEMO_BENCH_INTEGRATED=1`, because it needs the
 //!   Zswap proving/verifying material.
-//! * `zswap_memo_control` — a timer floor and the absent-memo statement value, so that the
-//!   analysis can tell a real measurement from measurement overhead.
+//! * `zswap_memo_control` — a timer floor, the absent-memo statement value, and a
+//!   `transient_hash` anchor that lets the schedule be expressed as a ratio to a coefficient the
+//!   shipped cost model already carries, rather than as an absolute time measured on a machine
+//!   that is not the one the rest of the model was calibrated on.
 //!
 //! ## Environment (all required; the harness panics rather than emitting a partial run)
 //!
@@ -67,7 +69,7 @@ use midnight_zswap::prove::ZswapResolver;
 use midnight_zswap::{
     Input, MAX_MEMO_BYTES, Memo, Offer, Output as ZswapOutput, ZSWAP_EXPECTED_FILES, memo_to_field,
 };
-use rand::{SeedableRng, rngs::StdRng};
+use rand::{Rng, SeedableRng, rngs::OsRng, rngs::StdRng};
 use serde_json::json;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -450,7 +452,7 @@ pub fn memo_statement(c: &mut Criterion) {
             "zswap_memo_validation",
         ],
         "expected_cases": {
-            "zswap_memo_control": 2,
+            "zswap_memo_control": 3,
             "zswap_memo_statement": lengths.len(),
             "zswap_memo_aggregate": profile.aggregate_counts(max_inputs()).len(),
             "zswap_memo_validation": if integrated_enabled() { profile.validation_cases().len() } else { 0 },
@@ -477,6 +479,26 @@ pub fn memo_statement(c: &mut Criterion) {
     // `Fr::from(0)`, because that is a claim about the code path and not about a duration.
     let id = json!({"container_type": "none", "control": "absent_statement_value", "memo_len": 0});
     group.bench_function(id.to_string(), |b| b.iter(|| black_box(Fr::from(0u64))));
+    // Anchor to a coefficient the shipped cost model already carries.
+    //
+    // Every other coefficient in `CostModel` was measured on the project's dedicated benchmarking
+    // machine, not on whatever host runs this harness. An absolute picosecond figure measured here
+    // would therefore be on a different scale from the model it joins, and would be silently too
+    // cheap on a host faster than the reference one. Measuring the model's own `transient_hash`
+    // benchmark alongside the memo workload gives a *ratio* on one machine, which is scale-free.
+    //
+    // The body must stay byte-for-byte equivalent to `transient-crypto/benches/benchmarking.rs`'s
+    // `transient_hash` case, random draws included: the shipped coefficient was measured with them
+    // inside the timed region, so an "improved" body here would anchor to a different quantity.
+    let id = json!({"container_type": "none", "control": "transient_hash_anchor", "memo_len": 0});
+    group.bench_function(id.to_string(), |b| {
+        b.iter(|| {
+            black_box(transient_crypto::hash::transient_hash(black_box(&[
+                Fr::from(OsRng.r#gen::<u64>()),
+                Fr::from(OsRng.r#gen::<u64>()),
+            ])))
+        })
+    });
     group.finish();
 
     let mut group = c.benchmark_group("zswap_memo_statement");

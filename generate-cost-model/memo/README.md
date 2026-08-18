@@ -135,3 +135,6 @@ output that looks usable and is not.
 * The run has no completion marker, so it was interrupted.
 * The shortest or longest memo measured under 100x the timer floor, which would suggest the call
   was optimised away.
+* The `transient_hash` anchor control is missing or degenerate. Without it the schedule could only
+  be expressed as absolute time measured on this host, and every other coefficient in `CostModel`
+  was measured on a different one.

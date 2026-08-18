@@ -262,6 +262,7 @@ def main(argv):
     benchmarks = collect_benchmarks(criterion_dir)
     rows = []
     floor_ns = None
+    anchor_ns = None
     statement_means = {}
 
     for group in GROUPS:
@@ -322,6 +323,8 @@ def main(argv):
             rows.append(row)
             if params.get("control") == "timer_floor":
                 floor_ns = mean
+            if params.get("control") == "transient_hash_anchor":
+                anchor_ns = mean
             if group == "zswap_memo_statement":
                 statement_means[params["memo_len"]] = mean
 
@@ -337,6 +340,20 @@ def main(argv):
                 f"memo_len={length} measured {ratio:.1f}x the timer floor, below the "
                 f"{MIN_FLOOR_RATIO}x threshold: the call may have been optimised away"
             )
+
+    # The anchor is load-bearing: without it the schedule can only be expressed in absolute time
+    # measured on a host that is not the one the rest of the cost model was calibrated on.
+    if anchor_ns is None:
+        raise CheckFailed(
+            "the transient_hash anchor control is missing; the schedule could then only be "
+            "expressed in absolute time on this host, which is not the machine the rest of the "
+            "cost model was measured on"
+        )
+    if anchor_ns / floor_ns < MIN_FLOOR_RATIO:
+        raise CheckFailed(
+            f"the transient_hash anchor measured {anchor_ns / floor_ns:.1f}x the timer floor, "
+            f"below the {MIN_FLOOR_RATIO}x threshold"
+        )
 
     results_dir.mkdir(parents=True, exist_ok=True)
     stem = f"zswap-memo-{profile}"
@@ -363,8 +380,11 @@ def main(argv):
             "case_counts": {group: len(benchmarks.get(group, [])) for group in GROUPS},
             "sample_size": sample_size,
             "timer_floor_ns": floor_ns,
+            "transient_hash_anchor_ns": anchor_ns,
             "floor_ratio_min_length": statement_means[min(statement_means)] / floor_ns,
             "floor_ratio_max_length": statement_means[max(statement_means)] / floor_ns,
+            "anchor_ratio_min_length": statement_means[min(statement_means)] / anchor_ns,
+            "anchor_ratio_max_length": statement_means[max(statement_means)] / anchor_ns,
         },
         "rows": len(rows),
         "acceptance_data": manifest.get("acceptance_data", False),
