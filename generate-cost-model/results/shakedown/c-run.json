@@ -1,0 +1,78 @@
+{
+  "acceptance_data": false,
+  "checks": {
+    "case_counts": {
+      "zswap_memo_aggregate": 4,
+      "zswap_memo_control": 2,
+      "zswap_memo_statement": 25,
+      "zswap_memo_validation": 2
+    },
+    "completion_marker": true,
+    "corpus_digest": "e913f88b5cbd9e3c",
+    "floor_ratio_max_length": 466666.7102717738,
+    "floor_ratio_min_length": 201117.96679605645,
+    "labels_recomputed": true,
+    "sample_size": 50,
+    "timer_floor_ns": 0.3793739033634417
+  },
+  "environment": {
+    "bench_out": "/out",
+    "cargo": "cargo 1.91.1 (ea2d97820 2025-10-10)",
+    "container_hostname": "1960dd851587",
+    "cpu_count": 12,
+    "env": {
+      "CARGO_BUILD_JOBS": "",
+      "MEMO_BENCH_INTEGRATED": "1",
+      "MEMO_BENCH_MAX_INPUTS": "",
+      "MEMO_BENCH_PROFILE": "shakedown",
+      "MEMO_LOAD_NOTE": "shared host; integrated group enabled; zk-params bind-mounted read-only; --network none",
+      "MEMO_RUN_ID": "shakedown-c",
+      "RUSTFLAGS": ""
+    },
+    "load_average_1_5_15": "8.54, 6.77, 5.69",
+    "machine": "aarch64",
+    "platform": "Linux-6.12.54-linuxkit-aarch64-with-glibc2.36",
+    "processor": "",
+    "rustc": "rustc 1.91.1 (ed61e7d7e 2025-11-07)"
+  },
+  "manifest": {
+    "acceptance_data": false,
+    "corpus": {
+      "corpus_commitment_sum": "53bfec411901fb9fc34dabb5760cfd8f28069209b93719292de46971d5ec2c40",
+      "corpus_digest_fnv1a64": "e913f88b5cbd9e3c",
+      "lengths": 25,
+      "profile": "shakedown"
+    },
+    "corpus_seed": "6d656d6f5f62656e",
+    "criterion": {
+      "measurement_ms": 1000,
+      "sample_size": 50,
+      "summary_statistic": "mean.point_estimate",
+      "warm_up_ms": 500
+    },
+    "expected_cases": {
+      "zswap_memo_aggregate": 4,
+      "zswap_memo_control": 2,
+      "zswap_memo_statement": 25,
+      "zswap_memo_validation": 2
+    },
+    "groups": [
+      "zswap_memo_control",
+      "zswap_memo_statement",
+      "zswap_memo_aggregate",
+      "zswap_memo_validation"
+    ],
+    "harness": "zswap/benches/memo_cost.rs",
+    "integrated": true,
+    "max_memo_bearing_inputs": 256,
+    "order_seed": "0c0ffee000000001",
+    "plan": "plans/00001-sub-02-memo-cost-calibration.md",
+    "profile": "shakedown",
+    "workload_classes": {
+      "hash_prefix_fields": 2,
+      "memo_bytes_per_field": 31,
+      "poseidon_rate": 2
+    }
+  },
+  "rows": 33
+}

@@ -1,0 +1,81 @@
+{
+  "acceptance_data": false,
+  "checks": {
+    "anchor_ratio_max_length": 4.8826042926462705,
+    "anchor_ratio_min_length": 2.2940375319894333,
+    "case_counts": {
+      "zswap_memo_aggregate": 4,
+      "zswap_memo_control": 3,
+      "zswap_memo_statement": 25,
+      "zswap_memo_validation": 0
+    },
+    "completion_marker": true,
+    "corpus_digest": "e913f88b5cbd9e3c",
+    "floor_ratio_max_length": 444083.6613902538,
+    "floor_ratio_min_length": 208647.78825244316,
+    "labels_recomputed": true,
+    "sample_size": 50,
+    "timer_floor_ns": 0.3665711982743648,
+    "transient_hash_anchor_ns": 33340.461387597876
+  },
+  "environment": {
+    "bench_out": "/out",
+    "cargo": "cargo 1.91.1 (ea2d97820 2025-10-10)",
+    "container_hostname": "06c0a9f002f0",
+    "cpu_count": 12,
+    "env": {
+      "CARGO_BUILD_JOBS": "",
+      "MEMO_BENCH_INTEGRATED": "0",
+      "MEMO_BENCH_MAX_INPUTS": "",
+      "MEMO_BENCH_PROFILE": "shakedown",
+      "MEMO_LOAD_NOTE": "shared host, harness commit 9d871af1; other agents' long-lived containers up; no build started by this task during the run",
+      "MEMO_RUN_ID": "shakedown-h",
+      "RUSTFLAGS": ""
+    },
+    "load_average_1_5_15": "4.50, 5.90, 5.93",
+    "machine": "aarch64",
+    "platform": "Linux-6.12.54-linuxkit-aarch64-with-glibc2.36",
+    "processor": "",
+    "rustc": "rustc 1.91.1 (ed61e7d7e 2025-11-07)"
+  },
+  "manifest": {
+    "acceptance_data": false,
+    "corpus": {
+      "corpus_commitment_sum": "53bfec411901fb9fc34dabb5760cfd8f28069209b93719292de46971d5ec2c40",
+      "corpus_digest_fnv1a64": "e913f88b5cbd9e3c",
+      "lengths": 25,
+      "profile": "shakedown"
+    },
+    "corpus_seed": "6d656d6f5f62656e",
+    "criterion": {
+      "measurement_ms": 1000,
+      "sample_size": 50,
+      "summary_statistic": "mean.point_estimate",
+      "warm_up_ms": 500
+    },
+    "expected_cases": {
+      "zswap_memo_aggregate": 4,
+      "zswap_memo_control": 3,
+      "zswap_memo_statement": 25,
+      "zswap_memo_validation": 0
+    },
+    "groups": [
+      "zswap_memo_control",
+      "zswap_memo_statement",
+      "zswap_memo_aggregate",
+      "zswap_memo_validation"
+    ],
+    "harness": "zswap/benches/memo_cost.rs",
+    "integrated": false,
+    "max_memo_bearing_inputs": 256,
+    "order_seed": "0c0ffee000000001",
+    "plan": "plans/00001-sub-02-memo-cost-calibration.md",
+    "profile": "shakedown",
+    "workload_classes": {
+      "hash_prefix_fields": 2,
+      "memo_bytes_per_field": 31,
+      "poseidon_rate": 2
+    }
+  },
+  "rows": 32
+}
